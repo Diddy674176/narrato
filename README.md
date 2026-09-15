@@ -232,19 +232,34 @@ Premium audio is cached and buffered through the same pipeline as Kokoro.
 ## Testing
 
 ```bash
-npm test          # 67 assertions: text pipeline, reader highlighting, playback engine
-npm run test:e2e  # 20 assertions: real browser, full import → listen flow
-npm run check     # lint + typecheck + tests
+npm test           # 75 assertions: text pipeline, reader highlighting, playback engine
+npm run test:e2e   # 20 assertions: real browser, full import → listen flow
+npm run verify:voice  # downloads Kokoro and synthesises real speech to a WAV
+npm run check      # lint + typecheck + tests
 ```
 
 - **text** — dehyphenation, wrap rejoining, header stripping, sentence splitting, chapter detection, chunk offset integrity, speaker attribution.
 - **reader** — exactly one sentence/word highlighted at a time, in every highlight mode, as playback advances.
-- **engine** — prebuffer before play, sequential priority, buffer maintenance and backoff, rate-scaled targets, cache reuse (zero regeneration on replay), bounded memory with URL revocation, retry on transient failure, seeking, and bulk preparation (progress, cancellation, and no regeneration of cached sections). Runs against stubbed IndexedDB and a fake Kokoro client with a simulated audio element.
+- **engine** — prebuffer before play, sequential priority, buffer maintenance and backoff, rate-scaled targets, cache reuse (zero regeneration on replay), bounded memory with URL revocation, retry on transient failure, seeking, and bulk preparation (progress, cancellation, and no regeneration of cached sections). Playback continuity is simulated in accelerated time: a device that generates faster than it plays must produce **zero** interruptions across chunk transitions, a slower-than-real-time device must have its opening absorbed by the prebuffer, and any stall must resume **without the user pressing play again**. Runs against stubbed IndexedDB and a fake Kokoro client with a simulated audio element.
 - **e2e** — Playwright against a production build: import → reader → library persistence across reload → voices → settings → player → chapters → prepare-audio, asserting no console errors. Also covers theming, full-screen player layout, and horizontal-overflow checks at 320 px and in landscape.
 
-### What could not be verified here
+### Hearing it for yourself
 
-**End-to-end Kokoro audio was not verified in the development sandbox**, because `huggingface.co` is blocked there, so the 92 MB model could never download. Verified instead: the worker boots, the failure path is graceful (clear message plus a one-tap "Use device voice" fallback, position preserved), and the entire buffering/caching/playback pipeline is covered by the engine suite against a stubbed generator. The Kokoro call itself is written against the real `kokoro-js` 1.2.1 API. **Please confirm voice quality and lock-screen behaviour on your own phone first.**
+`npm run verify:voice` is the end-to-end proof that the AI voice actually speaks. It downloads Kokoro-82M, pushes a deliberately awkward passage (a heading, a hyphen split across a line break, a soft-wrapped sentence, `Dr.`, `3.5`, and dialogue) through the **real** pipeline — `cleanText` → `detectChapters` → `planChunks` → Kokoro — then asserts the result is genuinely continuous speech:
+
+- every chunk is audible (RMS above a silence floor), at 24 kHz
+- no chunk contains a gap longer than 1.5s, and neither does the stitched whole
+- the narration pace lands in a human range (90–240 wpm)
+- each chunk join is a clean break rather than a cut mid-word
+- generation is faster than real time, so it can stay ahead of playback
+
+It writes `narrato-voice-sample.wav` so you can simply listen to it.
+
+**This runs in CI on every push and pull request** (the `voice` job), and the resulting WAV is uploaded as the `voice-sample` artifact — so the audio is produced by a real run, not asserted in a README.
+
+It could not be run in the development sandbox: `huggingface.co` is blocked there by egress policy, so the model could never download. That is also why the failure path is built out — a clear, actionable message plus a one-tap "Use device voice" fallback that preserves your place.
+
+**Still worth checking on your own phone:** subjective voice quality (preset names are mapped from metadata, not from listening) and lock-screen behaviour, which depends on your specific OS and browser.
 
 ---
 
@@ -282,6 +297,7 @@ src/
     screens/           library, add, reader, voices, settings
   state/store.tsx      settings, library, open document
 tests/                 text, reader, engine, e2e
+scripts/               verify-voice: real Kokoro synthesis + audio assertions
 ```
 
 ## Stack

@@ -32,6 +32,40 @@ jobs:
         with:
           path: dist
 
+  # Proves the AI voice actually speaks: downloads Kokoro-82M, runs a passage
+  # through the real text pipeline, and checks the audio is continuous speech
+  # at a human pace. The resulting WAV is uploaded so it can be listened to.
+  voice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      # The model is ~92 MB; keep it between runs.
+      - name: Cache Kokoro model
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/huggingface
+            .cache
+          key: kokoro-82m-v1.0-q8-v1
+
+      - name: Synthesise speech and verify it
+        run: npm run verify:voice
+
+      - name: Upload audio sample
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-sample
+          path: narrato-voice-sample.wav
+          if-no-files-found: warn
+
   # Deploy only from the default branch; pull requests just get the checks above.
   deploy:
     if: github.event_name != 'pull_request'

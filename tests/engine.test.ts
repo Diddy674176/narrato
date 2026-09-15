@@ -54,7 +54,7 @@ class FakeAudio {
 
 import type { Chapter, DocMeta, TextChunk, VoicePreset } from '../src/types';
 import { AudiobookEngine } from '../src/lib/player/engine';
-import { calls, requested, setFailNext } from './stubs/kokoro-client';
+import { calls, requested, setFailNext, setDelayMs } from './stubs/kokoro-client';
 import { store as audioStore, stats as dbStats } from './stubs/db';
 
 let failures = 0;
@@ -315,6 +315,90 @@ console.log('\n--- preparation can be cancelled ---');
   const res = await engine.prepareRange('book', () => { ticks++; }, () => ticks >= 3);
   check('stops promptly when cancelled', res.done <= 4, `done=${res.done}`);
   check('work done before cancelling is kept', audioStore.size > 0, `cached=${audioStore.size}`);
+  engine.destroy();
+}
+
+// ------------------------------------------------------------------
+// The headline requirement: it must not stop mid-book. We simulate playback
+// in accelerated time - each chunk is ~30s of audio "played" in PLAY_MS of
+// wall clock - and count how often the player is forced to wait for audio.
+console.log('\n--- continuous playback, no stalls ---');
+{
+  const PLAY_MS = 220;
+
+  const runPlayback = async (genMs: number, transitions: number) => {
+    audioStore.clear();
+    setDelayMs(genMs);
+    const { engine } = await boot();
+
+    let stalls = 0;
+    let prev = '';
+    const stop = engine.subscribe((s) => {
+      if (s.status === 'buffering' && prev !== 'buffering') stalls++;
+      prev = s.status;
+    });
+
+    await engine.play();
+    const el = currentEl();
+    const startStalls = stalls; // ignore the deliberate pre-play buffering
+
+    for (let i = 0; i < transitions; i++) {
+      await sleep(PLAY_MS);
+      el.emit('ended');
+      await sleep(20);
+    }
+
+    const snap = engine.snapshot();
+    stop();
+    engine.destroy();
+    setDelayMs(1);
+    return { stalls: stalls - startStalls, snap };
+  };
+
+  // A device that generates faster than it plays: zero interruptions.
+  const fast = await runPlayback(25, 10);
+  check('fast device: never stops during playback', fast.stalls === 0, `stalls=${fast.stalls}`);
+  check('fast device: advanced through the chunks', fast.snap.chunkIndex >= 10,
+    `index=${fast.snap.chunkIndex}`);
+  check('fast device: still playing at the end', fast.snap.status === 'playing',
+    `status=${fast.snap.status}`);
+
+  // A device slower than real time. Stalls are unavoidable eventually, but the
+  // prebuffer must absorb the first stretch and recovery must be automatic.
+  const slow = await runPlayback(700, 6);
+  check('slow device: prebuffer absorbs the opening chunks', slow.stalls <= 3,
+    `stalls=${slow.stalls}`);
+  check('slow device: recovers on its own, no user action', slow.snap.status !== 'error',
+    `status=${slow.snap.status}`);
+  check('slow device: still advancing through the book', slow.snap.chunkIndex >= 4,
+    `index=${slow.snap.chunkIndex}`);
+}
+
+console.log('\n--- a stall resumes by itself ---');
+{
+  audioStore.clear();
+  setDelayMs(400);
+  const { engine } = await boot();
+
+  await engine.play();
+  const el = currentEl();
+
+  // Burn through everything buffered so the next chunk cannot be ready.
+  for (let i = 0; i < 12; i++) {
+    el.emit('ended');
+    await sleep(5);
+  }
+  const during = engine.snapshot().status;
+
+  // No further input: the engine must pick itself up.
+  await sleep(2500);
+  const after = engine.snapshot().status;
+
+  check('stalling is surfaced rather than silent', during === 'buffering' || during === 'playing',
+    `during=${during}`);
+  check('playback resumes without the user pressing play', after === 'playing',
+    `after=${after}`);
+  setDelayMs(1);
   engine.destroy();
 }
 

@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "node tests/run.mjs",
     "test:e2e": "node tests/e2e.mjs",
-    "check": "npm run lint && tsc -b && npm test"
+    "check": "npm run lint && tsc -b && npm test",
+    "verify:voice": "node scripts/verify-voice.mjs"
   },
   "dependencies": {
     "idb": "^8.0.3",
