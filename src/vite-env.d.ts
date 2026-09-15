@@ -9,3 +9,14 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/**
+ * mammoth ships its browser build without type declarations. We only use
+ * convertToHtml, so a narrow declaration is better than pulling in `any`.
+ */
+declare module 'mammoth/mammoth.browser.js' {
+  export function convertToHtml(input: { arrayBuffer: ArrayBuffer }): Promise<{
+    value: string;
+    messages: Array<{ type: string; message: string }>;
+  }>;
+}
