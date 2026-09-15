@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import type { HighlightMode, StartupMode, ThemeMode } from '../../types';
+import type { HighlightMode, Settings, StartupMode, ThemeMode } from '../../types';
 import { useApp } from '../../state/store';
 import * as db from '../../lib/db';
 import { kokoroClient } from '../../lib/tts/kokoro/client';
+import { DTYPE_SIZE_MB } from '../../lib/tts/kokoro/protocol';
 import { PronunciationEditor } from '../components/PronunciationEditor';
 import { Banner, Segmented, SettingRow, Sheet, Switch } from '../components/common';
 
@@ -234,8 +235,54 @@ export function SettingsScreen(): React.JSX.Element {
             </SettingRow>
 
             {settings.showDiagnostics ? (
+              <>
+                <SettingRow
+                  label="Voice backend"
+                  hint="WebGPU is far faster where supported. Auto uses it on desktop and keeps phones on WASM, whose weights are a much smaller download."
+                >
+                  <select
+                    className="select"
+                    value={settings.kokoroDevice}
+                    onChange={(e) =>
+                      updateSettings({
+                        kokoroDevice: e.target.value as Settings['kokoroDevice'],
+                      })
+                    }
+                    aria-label="Voice backend"
+                  >
+                    <option value="auto">Auto</option>
+                    <option value="webgpu">WebGPU</option>
+                    <option value="wasm">WASM</option>
+                  </select>
+                </SettingRow>
+
+                <SettingRow
+                  label="Voice quality"
+                  hint={`Larger weights sound better but take longer to download (q8 ~${DTYPE_SIZE_MB.q8} MB, fp32 ~${DTYPE_SIZE_MB.fp32} MB). Changing this regenerates audio.`}
+                >
+                  <select
+                    className="select"
+                    value={settings.kokoroDtype}
+                    onChange={(e) =>
+                      updateSettings({ kokoroDtype: e.target.value as Settings['kokoroDtype'] })
+                    }
+                    aria-label="Voice quality"
+                  >
+                    <option value="auto">Auto</option>
+                    <option value="q4f16">Smallest ({DTYPE_SIZE_MB.q4f16} MB)</option>
+                    <option value="q8">Balanced ({DTYPE_SIZE_MB.q8} MB)</option>
+                    <option value="fp32">Best ({DTYPE_SIZE_MB.fp32} MB)</option>
+                  </select>
+                </SettingRow>
+              </>
+            ) : null}
+
+            {settings.showDiagnostics ? (
               <div className="small mono" style={{ paddingTop: 10, lineHeight: 1.8 }}>
-                <div>AI engine: {engineStatus.device?.toUpperCase() ?? 'not loaded'}</div>
+                <div>
+                  AI engine: {engineStatus.device?.toUpperCase() ?? 'not loaded'}
+                  {engineStatus.dtype ? ` / ${engineStatus.dtype}` : ''}
+                </div>
                 <div>State: {engineStatus.state}</div>
                 <div>
                   Real-time factor:{' '}
@@ -259,8 +306,11 @@ export function SettingsScreen(): React.JSX.Element {
               className="btn btn-block"
               style={{ marginTop: 10 }}
               onClick={() => {
-                kokoroClient.reinit({ device: 'auto', dtype: 'auto' });
-                showToast('Reloading the voice engine.');
+                kokoroClient.reinit({
+                  device: settings.kokoroDevice,
+                  dtype: settings.kokoroDtype,
+                });
+                showToast('Reloading the voice engine with these settings.');
               }}
             >
               Reload voice engine

@@ -854,7 +854,7 @@ export class AudiobookEngine {
         chunkIndex: chunk.index,
         voiceId,
         textHash: hashText(chunk.text),
-        modelVersion: MODEL_VERSION,
+        modelVersion: `${MODEL_VERSION}:${kokoroClient.getStatus().dtype ?? 'auto'}`,
       }),
       voiceId,
       preset,

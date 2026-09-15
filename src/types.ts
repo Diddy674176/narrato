@@ -194,6 +194,10 @@ export interface Settings {
   showDiagnostics: boolean;
   /** Preferred device-TTS system voice URI. */
   deviceVoiceURI: string | null;
+  /** Kokoro backend. 'auto' picks WebGPU on desktop, WASM on phones. */
+  kokoroDevice: 'auto' | KokoroDevice;
+  /** Kokoro weight precision. Bigger is better quality but a larger download. */
+  kokoroDtype: 'auto' | 'q8' | 'q4f16' | 'fp32';
 }
 
 /* ------------------------------------------------------------------ *
@@ -205,6 +209,8 @@ export type KokoroDevice = 'webgpu' | 'wasm';
 export interface EngineStatus {
   state: 'idle' | 'loading' | 'ready' | 'error' | 'unsupported';
   device: KokoroDevice | null;
+  /** Quantisation actually in use, once loaded. Part of the audio cache key. */
+  dtype: string | null;
   /** Model download progress, 0-1. */
   progress: number;
   message: string;

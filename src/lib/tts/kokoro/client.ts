@@ -51,6 +51,7 @@ class KokoroClient {
   private status: EngineStatus = {
     state: 'idle',
     device: null,
+    dtype: null,
     progress: 0,
     message: '',
     rtf: null,
@@ -109,6 +110,7 @@ class KokoroClient {
         this.setStatus({
           state: 'ready',
           device: msg.device,
+          dtype: msg.dtype,
           progress: 1,
           message: `Ready (${msg.device.toUpperCase()} / ${msg.dtype})`,
         });
@@ -172,7 +174,7 @@ class KokoroClient {
   reinit(pref: EnginePreference): void {
     this.dispose();
     this.initCalled = false;
-    this.status = { state: 'idle', device: null, progress: 0, message: '', rtf: null };
+    this.status = { state: 'idle', device: null, dtype: null, progress: 0, message: '', rtf: null };
     this.init(pref);
   }
 

@@ -55,6 +55,8 @@ export const DEFAULT_SETTINGS: Settings = {
   characterVoices: false,
   showDiagnostics: false,
   deviceVoiceURI: null,
+  kokoroDevice: 'auto',
+  kokoroDtype: 'auto',
 };
 
 export interface OpenDoc {
@@ -194,8 +196,10 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
   // Start loading the voice model as soon as Kokoro is the selected engine.
   useEffect(() => {
     if (!ready) return;
-    if (settings.engine === 'kokoro') kokoroClient.init();
-  }, [ready, settings.engine]);
+    if (settings.engine === 'kokoro') {
+      kokoroClient.init({ device: settings.kokoroDevice, dtype: settings.kokoroDtype });
+    }
+  }, [ready, settings.engine, settings.kokoroDevice, settings.kokoroDtype]);
 
   const preset = useMemo(() => {
     const chosen = getPreset(settings.presetId);
