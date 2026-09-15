@@ -6,7 +6,7 @@ import type {
   VoiceEngineId,
   VoicePreset,
 } from '../../types';
-import { audioKey, getAudio, putAudio, enforceCacheBudget } from '../db';
+import { audioKey, getAudio, hasAudioKeys, putAudio, enforceCacheBudget } from '../db';
 import { hashText } from '../hash';
 import { kokoroClient } from '../tts/kokoro/client';
 import { MODEL_VERSION } from '../tts/kokoro/protocol';
@@ -1132,6 +1132,90 @@ export class AudiobookEngine {
     if (!force && now - this.lastSavedAt < 3000) return;
     this.lastSavedAt = now;
     this.onPositionSave(this.chunkIndex, this.audio?.currentTime ?? 0);
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Bulk preparation
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Generate and cache a range of chunks ahead of time.
+   *
+   * For listening somewhere with no signal, or on a phone that will be locked
+   * for a long stretch. Playback always outranks this: before each bulk chunk
+   * we top the live buffer back up, so preparing a whole book never starves the
+   * audio that is actually playing.
+   */
+  async prepareRange(
+    scope: 'chapter' | 'book',
+    onProgress: (done: number, total: number) => void,
+    shouldCancel: () => boolean
+  ): Promise<{ done: number; total: number; failed: number }> {
+    if (this.mode === 'device') {
+      throw new Error('Device voices are generated as they play and cannot be prepared ahead.');
+    }
+
+    let from = 0;
+    let to = this.chunks.length - 1;
+    if (scope === 'chapter') {
+      const chapter = this.currentChapterIndex();
+      from = this.chapterStarts[chapter] ?? 0;
+      const nextStart = this.chapterStarts[chapter + 1];
+      to = nextStart === undefined ? this.chunks.length - 1 : nextStart - 1;
+    }
+
+    const total = Math.max(0, to - from + 1);
+    let done = 0;
+    let failed = 0;
+
+    for (let i = from; i <= to; i++) {
+      if (shouldCancel() || this.destroyed) break;
+
+      // Keep live playback fed first.
+      let guard = 0;
+      while (
+        this.wantPlaying &&
+        this.bufferedSec() < this.bufferTarget() &&
+        guard < 4 &&
+        !shouldCancel()
+      ) {
+        guard++;
+        await this.pump();
+      }
+
+      try {
+        await this.ensureChunk(i);
+      } catch {
+        failed++;
+      }
+      done++;
+      onProgress(done, total);
+      // Yield so the UI can paint progress and stay responsive.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    return { done, total, failed };
+  }
+
+  /** How much of a range is already cached, for showing readiness up front. */
+  async cachedCount(scope: 'chapter' | 'book'): Promise<{ cached: number; total: number }> {
+    let from = 0;
+    let to = this.chunks.length - 1;
+    if (scope === 'chapter') {
+      const chapter = this.currentChapterIndex();
+      from = this.chapterStarts[chapter] ?? 0;
+      const nextStart = this.chapterStarts[chapter + 1];
+      to = nextStart === undefined ? this.chunks.length - 1 : nextStart - 1;
+    }
+    if (!this.doc) return { cached: 0, total: 0 };
+
+    const keys: string[] = [];
+    for (let i = from; i <= to; i++) {
+      const chunk = this.chunks[i];
+      if (chunk) keys.push(this.keyFor(chunk).key);
+    }
+    const present = await hasAudioKeys(keys);
+    return { cached: present.size, total: keys.length };
   }
 
   /** Force an immediate position write, e.g. when the app is backgrounded. */

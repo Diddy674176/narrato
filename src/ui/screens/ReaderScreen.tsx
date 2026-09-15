@@ -5,6 +5,7 @@ import { formatDuration } from '../../lib/format';
 import { ReaderView } from '../components/ReaderView';
 import { CharacterManager } from '../components/CharacterManager';
 import { PronunciationEditor } from '../components/PronunciationEditor';
+import { PrepareSheet } from '../components/PrepareSheet';
 import { Banner, EmptyState, ProgressBar, Sheet } from '../components/common';
 
 /** The reading surface: text, highlighting, and the per-book tools. */
@@ -19,6 +20,7 @@ export function ReaderScreen({
   const [showCharacters, setShowCharacters] = useState(false);
   const [showPronunciation, setShowPronunciation] = useState(false);
   const [showBookmarks, setShowBookmarks] = useState(false);
+  const [showPrepare, setShowPrepare] = useState(false);
 
   if (!open) {
     return (
@@ -122,6 +124,9 @@ export function ReaderScreen({
             <button className="chip" onClick={() => setShowPronunciation(true)}>
               {'\u{1F5E3}️'} Pronunciation
             </button>
+            <button className="chip" onClick={() => setShowPrepare(true)}>
+              {'⬇️'} Prepare audio
+            </button>
           </div>
         </div>
 
@@ -141,6 +146,7 @@ export function ReaderScreen({
       </div>
 
       {showCharacters ? <CharacterManager onClose={() => setShowCharacters(false)} /> : null}
+      {showPrepare ? <PrepareSheet onClose={() => setShowPrepare(false)} /> : null}
       {showPronunciation ? (
         <PronunciationEditor
           onClose={() => setShowPronunciation(false)}

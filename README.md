@@ -53,6 +53,7 @@ Everything in this table was built and exercised; see [Testing](#testing) for wh
 | Progressive generation + prebuffer | ✅ |
 | IndexedDB audio cache with eviction | ✅ |
 | Media Session / lock-screen controls | ✅ (see [Background playback](#background-playback-the-honest-version)) |
+| Prepare chapter / whole document ahead | ✅ with progress, cancellable, playback keeps priority |
 | Sleep timer, incl. end-of-chapter | ✅ fades out rather than cutting |
 | Resume exactly where you stopped | ✅ |
 | Bookmarks | ✅ |
@@ -91,6 +92,7 @@ document → chapters → sentence-aligned chunks (~700 chars ≈ 25-45s)
 - **Strictly sequential priority.** The chunk you are about to need always outranks anything further ahead, and only one generation is in flight, so a seek is never stuck behind speculative work.
 - **It backs off.** Once comfortably ahead (1.6× target) generation pauses — that is what keeps a phone from cooking itself.
 - **Chunk size adapts to the device.** A measured real-time factor picks 420 / 700 / 950-character chunks.
+- **Prepare ahead on demand.** "Prepare audio" generates and caches a chapter or the whole document up front, for a flight or a tunnel. It reports progress, can be stopped without losing work, skips anything already cached, and yields to live playback between sections.
 - **Everything is cached** in IndexedDB keyed by document, chunk, voice, engine, text hash and model version. Re-listening never regenerates. Changing voice creates a *parallel* cache instead of destroying the old one.
 - **Memory stays bounded.** Only a window around the playhead is held as object URLs; the rest lives in IndexedDB and old URLs are revoked. This is what makes multi-hour books survive on a phone.
 
@@ -230,15 +232,15 @@ Premium audio is cached and buffered through the same pipeline as Kokoro.
 ## Testing
 
 ```bash
-npm test          # 58 assertions: text pipeline, reader highlighting, playback engine
-npm run test:e2e  # 17 assertions: real browser, full import → listen flow
+npm test          # 67 assertions: text pipeline, reader highlighting, playback engine
+npm run test:e2e  # 20 assertions: real browser, full import → listen flow
 npm run check     # lint + typecheck + tests
 ```
 
 - **text** — dehyphenation, wrap rejoining, header stripping, sentence splitting, chapter detection, chunk offset integrity, speaker attribution.
 - **reader** — exactly one sentence/word highlighted at a time, in every highlight mode, as playback advances.
-- **engine** — prebuffer before play, sequential priority, buffer maintenance and backoff, rate-scaled targets, cache reuse (zero regeneration on replay), bounded memory with URL revocation, retry on transient failure, seeking. Runs against stubbed IndexedDB and a fake Kokoro client with a simulated audio element.
-- **e2e** — Playwright against a production build: import → reader → library persistence across reload → voices → settings → player → chapters, asserting no console errors. Also covers theming, full-screen player layout, and horizontal-overflow checks at 320 px and in landscape.
+- **engine** — prebuffer before play, sequential priority, buffer maintenance and backoff, rate-scaled targets, cache reuse (zero regeneration on replay), bounded memory with URL revocation, retry on transient failure, seeking, and bulk preparation (progress, cancellation, and no regeneration of cached sections). Runs against stubbed IndexedDB and a fake Kokoro client with a simulated audio element.
+- **e2e** — Playwright against a production build: import → reader → library persistence across reload → voices → settings → player → chapters → prepare-audio, asserting no console errors. Also covers theming, full-screen player layout, and horizontal-overflow checks at 320 px and in landscape.
 
 ### What could not be verified here
 

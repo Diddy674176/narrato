@@ -18,3 +18,9 @@ export async function putAudio(entry: CachedAudio): Promise<void> {
   store.set(entry.key, entry);
 }
 export async function enforceCacheBudget(): Promise<number> { return 0; }
+
+export async function hasAudioKeys(keys: string[]): Promise<Set<string>> {
+  const found = new Set<string>();
+  for (const k of keys) if (store.has(k)) found.add(k);
+  return found;
+}

@@ -133,6 +133,54 @@ const chapterButtons = await page.$$('.sheet .doc-card');
 check('chapter list populated', chapterButtons.length === 2, `got ${chapterButtons.length}`);
 await page.screenshot({ path: `${SHOT}/07-chapters.png` });
 
+// 11. Prepare-audio sheet is reachable and reports cached state
+await page.click('.sheet .doc-card >> nth=0');
+// Selecting a chapter closes the chapter list but leaves the player covering
+// the reader, so dismiss it before reaching for the reader's own controls.
+await page.waitForSelector('.sheet', { state: 'detached', timeout: 10000 });
+await page.click('.player-sheet .icon-btn >> nth=0');
+await page.waitForSelector('.player-sheet', { state: 'detached', timeout: 10000 });
+await page.waitForSelector('.reader', { timeout: 10000 });
+await page.click('text=Prepare audio');
+await page.waitForSelector('.sheet');
+
+// The engine was switched to device voices earlier in this run, where there is
+// nothing to generate ahead of time - the sheet should say so rather than
+// offering a button that cannot work.
+const deviceText = await page.textContent('.sheet');
+check(
+  'prepare sheet explains device voices cannot be prepared',
+  deviceText.includes('nothing to prepare in advance'),
+  deviceText.slice(0, 80),
+);
+await page.click('.sheet .icon-btn >> nth=0');
+await page.waitForSelector('.sheet', { state: 'detached' });
+
+// Switch back to the on-device AI engine, where preparing is meaningful.
+await page.click('nav.nav >> text=Voices');
+await page.waitForSelector('text=Voice engine');
+await page.click('text=Kokoro AI');
+await page.click('nav.nav >> text=Reader');
+await page.waitForSelector('.reader', { timeout: 10000 });
+await page.click('text=Prepare audio');
+await page.waitForSelector('.sheet');
+const prepareText = await page.textContent('.sheet');
+check(
+  'prepare sheet offers chapter and whole-document scopes',
+  prepareText.includes('This chapter') && prepareText.includes('Whole document'),
+  prepareText.slice(0, 80),
+);
+
+// The cached count is read from IndexedDB, so wait for it rather than racing it.
+const cachedLine = await page
+  .waitForSelector('text=sections already prepared', { timeout: 10000 })
+  .then(() => true)
+  .catch(() => false);
+check('prepare sheet reports how much is already cached', cachedLine,
+  (await page.textContent('.sheet')).slice(0, 120));
+await page.screenshot({ path: `${SHOT}/08-prepare.png` });
+await page.click('.sheet .icon-btn >> nth=0');
+
 const realErrors = errors.filter(
   (e) => !/favicon|manifest|Download the React DevTools/i.test(e),
 );

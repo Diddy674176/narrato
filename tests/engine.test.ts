@@ -274,5 +274,49 @@ console.log('\n--- seeking ---');
   engine.destroy();
 }
 
+// ------------------------------------------------------------------
+console.log('\n--- bulk preparation ---');
+{
+  audioStore.clear();
+  calls.length = 0;
+  const { engine } = await boot();
+
+  const before = await engine.cachedCount('chapter');
+  check('nothing cached to begin with', before.cached === 0 && before.total === 12,
+    JSON.stringify(before));
+
+  const seen: number[] = [];
+  const result = await engine.prepareRange('chapter', (done) => seen.push(done), () => false);
+  check('prepared the whole chapter', result.done === 12 && result.total === 12,
+    JSON.stringify(result));
+  check('no failures', result.failed === 0);
+  check('progress reported for each section', seen.length === 12, `ticks=${seen.length}`);
+
+  const after = await engine.cachedCount('chapter');
+  check('chapter now fully cached', after.cached === 12, JSON.stringify(after));
+
+  // A second run must be a no-op against the cache, not a regeneration.
+  calls.length = 0;
+  await engine.prepareRange('chapter', () => {}, () => false);
+  check('re-preparing regenerates nothing', calls.length === 0, `regenerated=${calls.length}`);
+
+  // Whole-document scope covers both chapters.
+  const book = await engine.cachedCount('book');
+  check('book scope spans every chunk', book.total === CHUNK_COUNT, JSON.stringify(book));
+
+  engine.destroy();
+}
+
+console.log('\n--- preparation can be cancelled ---');
+{
+  audioStore.clear();
+  const { engine } = await boot();
+  let ticks = 0;
+  const res = await engine.prepareRange('book', () => { ticks++; }, () => ticks >= 3);
+  check('stops promptly when cancelled', res.done <= 4, `done=${res.done}`);
+  check('work done before cancelling is kept', audioStore.size > 0, `cached=${audioStore.size}`);
+  engine.destroy();
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);
