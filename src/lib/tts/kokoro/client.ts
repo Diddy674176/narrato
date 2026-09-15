@@ -16,6 +16,26 @@ export interface GenerateResult {
 
 type StatusListener = (status: EngineStatus) => void;
 
+/**
+ * Turn a raw load failure into something a listener can act on.
+ *
+ * "Failed to fetch" is what the browser says when the model download is
+ * blocked, offline, or filtered; on its own it tells the user nothing about
+ * what to do next.
+ */
+function describeInitFailure(raw: string): string {
+  if (/failed to fetch|networkerror|load failed|err_|fetch/i.test(raw)) {
+    return 'The voice model could not be downloaded. Check your connection, then try again - or use Device voices in the meantime.';
+  }
+  if (/quota|storage/i.test(raw)) {
+    return 'There is not enough free storage to install the voice model. Free some space, or use Device voices.';
+  }
+  if (/wasm|webassembly|gpu|shader/i.test(raw)) {
+    return `This browser could not start the voice engine (${raw}). Device voices will still work.`;
+  }
+  return `The voice engine could not start: ${raw}`;
+}
+
 interface Pending {
   resolve: (r: GenerateResult) => void;
   reject: (e: Error) => void;
@@ -94,11 +114,13 @@ class KokoroClient {
         });
         break;
 
-      case 'initError':
-        this.setStatus({ state: 'error', message: msg.message });
-        for (const [, p] of this.pending) p.reject(new Error(msg.message));
+      case 'initError': {
+        const friendly = describeInitFailure(msg.message);
+        this.setStatus({ state: 'error', message: friendly });
+        for (const [, p] of this.pending) p.reject(new Error(friendly));
         this.pending.clear();
         break;
+      }
 
       case 'result': {
         const pending = this.pending.get(msg.id);

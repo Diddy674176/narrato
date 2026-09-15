@@ -79,11 +79,12 @@ export function ReaderScreen({
 
         {modelError ? (
           <Banner kind="error">
-            The AI voice engine could not start ({engineStatus.message}). You can switch to your
-            device&rsquo;s built-in voices in{' '}
-            <button className="btn btn-sm" onClick={onOpenVoices}>
-              Voices
-            </button>
+            {engineStatus.message}
+            <div className="btn-row" style={{ marginTop: 10 }}>
+              <button className="btn btn-sm" onClick={onOpenVoices}>
+                Choose a different voice
+              </button>
+            </div>
           </Banner>
         ) : null}
 
