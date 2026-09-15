@@ -46,14 +46,13 @@ jobs:
           cache: npm
       - run: npm ci
 
-      # The model is ~92 MB; keep it between runs.
+      # The model is ~92 MB. voice-check pins transformers.js at .model-cache
+      # so this path is stable across runs (node_modules is wiped by npm ci).
       - name: Cache Kokoro model
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cache/huggingface
-            .cache
-          key: kokoro-82m-v1.0-q8-v1
+          path: .model-cache
+          key: kokoro-82m-v1.0-q8-v2
 
       - name: Synthesise speech and verify it
         run: npm run verify:voice

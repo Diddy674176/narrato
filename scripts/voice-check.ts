@@ -11,10 +11,16 @@
  */
 import { writeFileSync } from 'node:fs';
 import { KokoroTTS } from 'kokoro-js';
+import { env as hfEnv } from '@huggingface/transformers';
 import { cleanText, countWords } from '../src/lib/textProcess';
 import { detectChapters } from '../src/lib/chapters';
 import { planChunks, DEFAULT_CHUNK_OPTIONS } from '../src/lib/chunker';
 import { getPreset } from '../src/lib/tts/voices';
+
+// Pin the model cache to a predictable directory so CI can cache it between
+// runs; transformers.js otherwise hides it inside node_modules, which npm ci
+// wipes on every run.
+hfEnv.cacheDir = process.env.MODEL_CACHE_DIR ?? '.model-cache';
 
 const SAMPLE_RATE = 24000;
 const OUT = process.env.VOICE_OUT ?? 'narrato-voice-sample.wav';
