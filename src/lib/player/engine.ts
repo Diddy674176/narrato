@@ -438,7 +438,7 @@ export class AudiobookEngine {
    */
   private async waitForPrebuffer(): Promise<void> {
     const target = this.prebufferTarget();
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + this.prebufferWaitMs();
 
     while (!this.destroyed && this.wantPlaying) {
       if (this.bufferedSec() >= target) return;
@@ -728,14 +728,52 @@ export class AudiobookEngine {
    * Generation pump
    * ---------------------------------------------------------------- */
 
+  /**
+   * How much extra to bank when the device is slow.
+   *
+   * Real-time factor is audio-seconds produced per second of compute. Below
+   * 1.0 the device cannot generate as fast as it plays, so the buffer can only
+   * ever shrink once playback starts - the only defence is to bank more before
+   * starting. Measured on a 2-core CI runner, Kokoro q8 sits right at 0.99x,
+   * so this is not a hypothetical case.
+   */
+  private performanceMultiplier(): number {
+    if (this.mode === 'device') return 1;
+    const rtf = kokoroClient.getStatus().rtf;
+    if (rtf === null) return 1;
+    if (rtf < 1.2) return 1.8;
+    if (rtf < 2) return 1.3;
+    return 1;
+  }
+
   private bufferTarget(): number {
     const base = STARTUP_TARGET[this.startupMode];
     // Faster playback drains the buffer proportionally faster.
-    return base * this.rate;
+    return base * this.rate * this.performanceMultiplier();
   }
 
   private prebufferTarget(): number {
-    return STARTUP_PREBUFFER[this.startupMode] * this.rate;
+    return STARTUP_PREBUFFER[this.startupMode] * this.rate * this.performanceMultiplier();
+  }
+
+  /**
+   * How long we are willing to make the user wait before playback starts.
+   *
+   * This is the user's lever on a slow device: "Smooth" trades a longer wait
+   * for a buffer big enough to survive the whole session, "Fast" starts almost
+   * immediately and accepts pauses.
+   */
+  private prebufferWaitMs(): number {
+    if (this.startupMode === 'fast') return 12_000;
+    if (this.startupMode === 'smooth') return 45_000;
+    return 20_000;
+  }
+
+  /** True when this device cannot generate as fast as it plays. */
+  isUnderpowered(): boolean {
+    if (this.mode === 'device') return false;
+    const rtf = kokoroClient.getStatus().rtf;
+    return rtf !== null && rtf < 1.2;
   }
 
   /** Contiguous generated audio ahead of the playhead, in real seconds. */

@@ -91,7 +91,8 @@ document → chapters → sentence-aligned chunks (~700 chars ≈ 25-45s)
 - **Buffer target scales with playback rate.** At 2× you burn buffer twice as fast, so the target doubles.
 - **Strictly sequential priority.** The chunk you are about to need always outranks anything further ahead, and only one generation is in flight, so a seek is never stuck behind speculative work.
 - **It backs off.** Once comfortably ahead (1.6× target) generation pauses — that is what keeps a phone from cooking itself.
-- **Chunk size adapts to the device.** A measured real-time factor picks 420 / 700 / 950-character chunks.
+- **Chunk size and buffer depth adapt to the device.** A measured real-time factor (audio seconds produced per second of compute) picks 420 / 700 / 950-character chunks, and scales the buffer target: below 1.2x the app banks ~1.8x more audio before starting, because a device under 1.0x can *never* grow its buffer while playing.
+- **It says so when the device is too slow.** Rather than stalling and apologising, Narrato detects sub-real-time generation up front and offers the two things that help: a bigger pre-roll ("Smooth" start) or the device voice. For reference, a 2-core CI runner measures ~0.99x; ordinary phones and laptops are well above that.
 - **Prepare ahead on demand.** "Prepare audio" generates and caches a chapter or the whole document up front, for a flight or a tunnel. It reports progress, can be stopped without losing work, skips anything already cached, and yields to live playback between sections.
 - **Everything is cached** in IndexedDB keyed by document, chunk, voice, engine, text hash and model version. Re-listening never regenerates. Changing voice creates a *parallel* cache instead of destroying the old one.
 - **Memory stays bounded.** Only a window around the playhead is held as object URLs; the rest lives in IndexedDB and old URLs are revoked. This is what makes multi-hour books survive on a phone.
@@ -232,7 +233,7 @@ Premium audio is cached and buffered through the same pipeline as Kokoro.
 ## Testing
 
 ```bash
-npm test           # 75 assertions: text pipeline, reader highlighting, playback engine
+npm test           # 81 assertions: text pipeline, reader highlighting, playback engine
 npm run test:e2e   # 20 assertions: real browser, full import → listen flow
 npm run verify:voice  # downloads Kokoro and synthesises real speech to a WAV
 npm run check      # lint + typecheck + tests
@@ -254,6 +255,8 @@ npm run check      # lint + typecheck + tests
 - generation is faster than real time, so it can stay ahead of playback
 
 It writes `narrato-voice-sample.wav` so you can simply listen to it.
+
+Real-time factor is **reported, not gated** — it is a property of the machine, not of this code. The check only fails if generation is implausibly slow (below 0.5x), which would indicate something genuinely broken rather than merely modest hardware.
 
 **This runs in CI on every push and pull request** (the `voice` job), and the resulting WAV is uploaded as the `voice-sample` artifact — so the audio is produced by a real run, not asserted in a README.
 

@@ -7,6 +7,7 @@ import { CharacterManager } from '../components/CharacterManager';
 import { PronunciationEditor } from '../components/PronunciationEditor';
 import { PrepareSheet } from '../components/PrepareSheet';
 import { Banner, EmptyState, ProgressBar, Sheet } from '../components/common';
+import { SlowDeviceNotice } from '../components/SlowDeviceNotice';
 
 /** The reading surface: text, highlighting, and the per-book tools. */
 export function ReaderScreen({
@@ -87,6 +88,8 @@ export function ReaderScreen({
             </div>
           </Banner>
         ) : null}
+
+        <SlowDeviceNotice />
 
         <div style={{ margin: '14px 0' }}>
           <div className="spread" style={{ marginBottom: 6 }}>

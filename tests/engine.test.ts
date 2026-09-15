@@ -54,7 +54,7 @@ class FakeAudio {
 
 import type { Chapter, DocMeta, TextChunk, VoicePreset } from '../src/types';
 import { AudiobookEngine } from '../src/lib/player/engine';
-import { calls, requested, setFailNext, setDelayMs } from './stubs/kokoro-client';
+import { calls, requested, setFailNext, setDelayMs, setRtf } from './stubs/kokoro-client';
 import { store as audioStore, stats as dbStats } from './stubs/db';
 
 let failures = 0;
@@ -400,6 +400,50 @@ console.log('\n--- a stall resumes by itself ---');
     `after=${after}`);
   setDelayMs(1);
   engine.destroy();
+}
+
+// ------------------------------------------------------------------
+// A 2-core CI runner measures Kokoro q8 at ~0.99x real time: it can never
+// build a buffer while playing, so the only defence is banking more before
+// playback starts.
+console.log('\n--- adapts to an underpowered device ---');
+{
+  setRtf(4);
+  const { engine: quick } = await boot();
+  const fastTarget = quick.snapshot().bufferTargetSec;
+  check('a fast device is not flagged as underpowered', !quick.isUnderpowered());
+  quick.destroy();
+
+  setRtf(0.99);
+  const { engine: slow } = await boot();
+  const slowTarget = slow.snapshot().bufferTargetSec;
+  check('a sub-real-time device is flagged', slow.isUnderpowered());
+  check(
+    'an underpowered device banks a bigger buffer',
+    slowTarget > fastTarget * 1.5,
+    `fast=${fastTarget} slow=${slowTarget}`,
+  );
+  slow.destroy();
+
+  setRtf(1.6);
+  const { engine: mid } = await boot();
+  const midTarget = mid.snapshot().bufferTargetSec;
+  check('a merely modest device gets a smaller bump', midTarget > fastTarget && midTarget < slowTarget,
+    `mid=${midTarget}`);
+  check('a modest device is not flagged as underpowered', !mid.isUnderpowered());
+  mid.destroy();
+
+  // Device voices are spoken as they play, so none of this applies.
+  setRtf(0.5);
+  const { engine: dev } = await boot();
+  dev.configure({
+    preset: PRESET, mode: 'device', rate: 1, volume: 1,
+    startupMode: 'balanced', skipSeconds: 15, deviceVoiceURI: null,
+  });
+  check('device voices are never flagged as underpowered', !dev.isUnderpowered());
+  dev.destroy();
+
+  setRtf(4);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);

@@ -3,6 +3,7 @@ import { useApp } from '../../state/store';
 import { engine } from '../../lib/player/engine';
 import { formatTime } from '../../lib/format';
 import { Sheet } from './common';
+import { SlowDeviceNotice } from './SlowDeviceNotice';
 
 /**
  * Full-screen player.
@@ -154,6 +155,8 @@ export function PlayerSheet({ onClose }: { onClose: () => void }): React.JSX.Ele
             {engineStatus.device ? ` · ${engineStatus.device.toUpperCase()}` : ''}
           </span>
         </div>
+
+        <SlowDeviceNotice />
 
         {player.error ? (
           <div className="banner banner-error">

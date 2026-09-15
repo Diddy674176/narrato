@@ -8,11 +8,15 @@ export function setFailNext(n: number): void { failNext = n; }
 export let delayMs = 1;
 export function setDelayMs(ms: number): void { delayMs = ms; }
 
+/** Reported real-time factor, for exercising slow-device adaptation. */
+export let rtf: number | null = 4;
+export function setRtf(v: number | null): void { rtf = v; }
+
 /** Text length maps to a plausible audio duration (~15 chars/second). */
 function durationFor(text: string): number { return Math.max(1, text.length / 15); }
 
 export const kokoroClient = {
-  getStatus() { return { state: 'ready', device: 'wasm', progress: 1, message: '', rtf: 4 }; },
+  getStatus() { return { state: 'ready', device: 'wasm', progress: 1, message: '', rtf }; },
   subscribe(fn: (s: unknown) => void) { fn(this.getStatus()); return () => {}; },
   init() {},
   reinit() {},
