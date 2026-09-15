@@ -130,6 +130,8 @@ export interface ReadingPosition {
   updatedAt: number;
   /** Total seconds listened to this document, for stats. */
   listenedSec: number;
+  /** 0-1 through the document, so the library can show progress cheaply. */
+  progress: number;
 }
 
 export interface Bookmark {

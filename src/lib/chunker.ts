@@ -182,7 +182,7 @@ export function planChunks(chapters: Chapter[], opts: ChunkOptions): TextChunk[]
 
 /** Index of the first chunk of each chapter, for chapter navigation. */
 export function chapterStartChunks(chunks: TextChunk[], chapterCount: number): number[] {
-  const starts = new Array<number>(chapterCount).fill(0);
+  const starts: number[] = Array.from({ length: chapterCount }, () => 0);
   const seen = new Set<number>();
   for (const chunk of chunks) {
     if (!seen.has(chunk.chapterIndex)) {

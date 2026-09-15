@@ -11,6 +11,7 @@ import { hashText } from '../hash';
 import { kokoroClient } from '../tts/kokoro/client';
 import { MODEL_VERSION } from '../tts/kokoro/protocol';
 import { matchSystemVoice } from '../tts/voices';
+import { generatePremium } from '../tts/premium';
 import {
   clearMediaHandlers,
   setMediaHandlers,
@@ -520,6 +521,25 @@ export class AudiobookEngine {
     await this.goToChunk(index, remaining);
   }
 
+  /**
+   * Seek to an absolute position in the whole document.
+   *
+   * Durations are exact for chunks already generated and estimated for the
+   * rest, so scrubbing far into an ungenerated book lands approximately and
+   * then settles as real durations replace estimates.
+   */
+  async seekToAbsolute(seconds: number): Promise<void> {
+    let remaining = Math.max(0, seconds);
+    for (let i = 0; i < this.chunks.length; i++) {
+      const dur = this.durations.get(i) ?? this.chunks[i]!.estSeconds;
+      if (remaining <= dur || i === this.chunks.length - 1) {
+        await this.goToChunk(i, Math.min(remaining, dur));
+        return;
+      }
+      remaining -= dur;
+    }
+  }
+
   async goToChunk(index: number, offset = 0): Promise<void> {
     const target = Math.max(0, Math.min(index, this.chunks.length - 1));
     if (this.mode === 'device') {
@@ -720,7 +740,8 @@ export class AudiobookEngine {
 
   /** Contiguous generated audio ahead of the playhead, in real seconds. */
   private bufferedSec(): number {
-    if (this.mode !== 'kokoro') return 0;
+    // Device TTS speaks utterances directly and has nothing to buffer.
+    if (this.mode === 'device') return 0;
     let total = 0;
     const current = this.ready.get(this.chunkIndex);
     if (!current) return 0;
@@ -752,7 +773,7 @@ export class AudiobookEngine {
    * just delay the one that matters after a seek.
    */
   private async pump(): Promise<void> {
-    if (this.destroyed || this.mode !== 'kokoro') return;
+    if (this.destroyed || this.mode === 'device') return;
     if (this.inflight !== null) return;
     if (!this.doc || this.chunks.length === 0) return;
 
@@ -785,16 +806,19 @@ export class AudiobookEngine {
   /** Cache key for a chunk under the currently selected voice. */
   private keyFor(chunk: TextChunk): { key: string; voiceId: string; preset: VoicePreset } {
     const preset = this.presetFor(chunk);
-    const spoken = chunk.text;
+    // The engine is part of the voice identity: the same preset sounds
+    // completely different through Kokoro and through a cloud relay, so their
+    // cached audio must not collide.
+    const voiceId = `${this.mode}:${preset.id}`;
     return {
       key: audioKey({
         docId: this.doc!.id,
         chunkIndex: chunk.index,
-        voiceId: preset.id,
-        textHash: hashText(spoken),
+        voiceId,
+        textHash: hashText(chunk.text),
         modelVersion: MODEL_VERSION,
       }),
-      voiceId: preset.id,
+      voiceId,
       preset,
     };
   }
@@ -870,7 +894,7 @@ export class AudiobookEngine {
       return entry;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.error = `Voice generation failed: ${message}`;
+      this.error = this.friendlyError(message);
       this.emit();
       throw err instanceof Error ? err : new Error(message);
     } finally {
@@ -879,17 +903,47 @@ export class AudiobookEngine {
     }
   }
 
-  /** One retry, as specified: transient worker hiccups should not stop a book. */
+  /**
+   * Turn a raw failure into something the listener can act on.
+   *
+   * "Voice engine is not loaded" is true but useless; what the user needs to
+   * know is whether to wait or to switch engines.
+   */
+  private friendlyError(raw: string): string {
+    if (this.mode === 'kokoro') {
+      const status = kokoroClient.getStatus();
+      if (status.state === 'loading') {
+        return 'Still downloading the AI voice model. Playback will start on its own once it is ready.';
+      }
+      if (status.state !== 'ready') {
+        return 'The AI voice model could not load on this device. Switch to Device voices to keep listening.';
+      }
+      return `This section could not be generated (${raw}). Retry, or switch to Device voices.`;
+    }
+    if (this.mode === 'premium') {
+      return `The premium voice relay failed (${raw}). Check the relay, or switch to Kokoro.`;
+    }
+    return `Voice generation failed: ${raw}`;
+  }
+
+  /**
+   * Synthesise one chunk, with a single retry.
+   *
+   * A transient worker hiccup or a dropped relay request should cost a moment,
+   * not the rest of the book.
+   */
   private async generateWithRetry(
     text: string,
     preset: VoicePreset
   ): Promise<{ blob: Blob; durationSec: number }> {
-    const voice = preset.kokoroVoice ?? 'af_heart';
-    const speed = preset.rateBias;
+    const once = (): Promise<{ blob: Blob; durationSec: number }> => {
+      if (this.mode === 'premium') return generatePremium(text, preset);
+      return kokoroClient.generate(text, preset.kokoroVoice ?? 'af_heart', preset.rateBias);
+    };
     try {
-      return await kokoroClient.generate(text, voice, speed);
+      return await once();
     } catch {
-      return await kokoroClient.generate(text, voice, speed);
+      return await once();
     }
   }
 
@@ -1078,6 +1132,11 @@ export class AudiobookEngine {
     if (!force && now - this.lastSavedAt < 3000) return;
     this.lastSavedAt = now;
     this.onPositionSave(this.chunkIndex, this.audio?.currentTime ?? 0);
+  }
+
+  /** Force an immediate position write, e.g. when the app is backgrounded. */
+  savePositionNow(): void {
+    this.savePosition(true);
   }
 
   destroy(): void {

@@ -10,6 +10,7 @@
 
 // Invisible characters written as escapes so the source stays ASCII-only.
 const ZERO_WIDTH = new RegExp('[\\u200B-\\u200D\\uFEFF\\u00AD]', 'g');
+// oxlint-disable-next-line no-control-regex -- stripping control characters is the point
 const CONTROL = new RegExp('[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]', 'g');
 
 /** Lines that are nothing but a page number or roman numeral. */
@@ -67,7 +68,7 @@ function joinWrappedLines(input: string): string {
 
     const prevEndsSentence = /[.!?:;"'’”…)\]]$/.test(prev);
     const startsLower = /^[a-z,;]/.test(line);
-    const prevEndsWithComma = /,$/.test(prev);
+    const prevEndsWithComma = prev.endsWith(',');
     const startsWithBullet = /^\s*(?:[-*•·]|\d+[.)])\s/.test(line);
 
     const isContinuation =
@@ -218,7 +219,7 @@ export function splitSentences(text: string): string[] {
     // A sentence ends only when what follows looks like a new one.
     if (rest !== '') {
       if (!/^\s/.test(rest)) continue;
-      if (!/^\s*[A-Z"'‘“—(\[\d]/.test(rest)) continue;
+      if (!/^\s*[A-Z"'‘“—([\d]/.test(rest)) continue;
     }
 
     if (trimmed !== '') out.push(trimmed);
