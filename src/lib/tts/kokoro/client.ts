@@ -1,5 +1,5 @@
 import type { EngineStatus, KokoroDevice } from '../../../types';
-import { abandonIsolation } from '../isolation';
+import { abandonIsolation, forgetIsolationStrikes } from '../isolation';
 import type { EnginePreference, FromWorker, KokoroDtype, ToWorker } from './protocol';
 
 /**
@@ -74,31 +74,6 @@ class KokoroClient {
     for (const fn of this.listeners) fn(this.status);
   }
 
-  /**
-   * Start loading the model *if it has already been downloaded once*.
-   *
-   * Waiting for the first Play to start a 92 MB download is the difference
-   * between an app that speaks instantly on the second visit and one that
-   * always makes you wait. Warming only what is already on the device keeps
-   * that win without spending a stranger's mobile data on a maybe.
-   */
-  async warmIfCached(): Promise<void> {
-    if (this.initCalled || typeof caches === 'undefined') return;
-    try {
-      for (const name of await caches.keys()) {
-        if (!/transformers/i.test(name)) continue;
-        const cache = await caches.open(name);
-        const hit = (await cache.keys()).some((req) => req.url.includes('Kokoro-82M'));
-        if (hit) {
-          this.init();
-          return;
-        }
-      }
-    } catch {
-      /* no Cache Storage: the model loads on demand, as before */
-    }
-  }
-
   /** Cross-origin isolation is not required, but WASM threads are faster with it. */
   static isSupported(): boolean {
     return typeof Worker !== 'undefined' && typeof WebAssembly !== 'undefined';
@@ -134,6 +109,7 @@ class KokoroClient {
         break;
 
       case 'ready':
+        forgetIsolationStrikes();
         this.setStatus({
           state: 'ready',
           device: msg.device,

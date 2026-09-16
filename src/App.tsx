@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AppProvider, useApp } from './state/store';
 import { engine } from './lib/player/engine';
-import { kokoroClient } from './lib/tts/kokoro/client';
 import { LibraryScreen } from './ui/screens/LibraryScreen';
 import { AddScreen } from './ui/screens/AddScreen';
 import { ReaderScreen } from './ui/screens/ReaderScreen';
@@ -63,12 +62,6 @@ function Shell(): React.JSX.Element {
     },
     [openDoc, setTab]
   );
-
-  // If the voice model is already on the device, start loading it now rather
-  // than when the user presses Play - it is several seconds either way.
-  useEffect(() => {
-    void kokoroClient.warmIfCached();
-  }, []);
 
   // Desktop keyboard shortcuts. Ignored while typing in a field.
   useEffect(() => {
