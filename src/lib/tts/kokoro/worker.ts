@@ -1,8 +1,9 @@
 /// <reference lib="webworker" />
 import { KokoroTTS } from 'kokoro-js';
+import { env as hfEnv } from '@huggingface/transformers';
 import type { KokoroDevice, KokoroVoiceId } from '../../../types';
 import type { EnginePreference, FromWorker, KokoroDtype, ToWorker } from './protocol';
-import { KOKORO_MODEL_ID, resolveEnginePreference } from './protocol';
+import { KOKORO_MODEL_ID, resolveEnginePreference, wasmThreadCount } from './protocol';
 
 /**
  * Kokoro inference worker.
@@ -19,12 +20,14 @@ declare const self: {
   postMessage(message: FromWorker, transfer?: Transferable[]): void;
   onmessage: ((e: { data: ToWorker }) => void) | null;
   navigator: { gpu?: unknown; hardwareConcurrency?: number; userAgent?: string };
+  crossOriginIsolated?: boolean;
 };
 
 let tts: KokoroTTS | null = null;
 let initPromise: Promise<void> | null = null;
 let activeDevice: KokoroDevice = 'wasm';
 let activeDtype: KokoroDtype = 'q8';
+let activeThreads = 1;
 
 /** Generations the main thread gave up on; results are dropped. */
 const cancelled = new Set<number>();
@@ -53,6 +56,16 @@ function resolvePreference(pref: EnginePreference): { device: KokoroDevice; dtyp
 
 async function loadWith(device: KokoroDevice, dtype: KokoroDtype): Promise<KokoroTTS> {
   const fileProgress = new Map<string, number>();
+
+  // Threads are the single biggest speed-up available to the WASM backend, and
+  // ONNX Runtime silently settles for one thread if nobody asks. Ask.
+  activeThreads = wasmThreadCount(
+    self.navigator?.hardwareConcurrency ?? 0,
+    self.crossOriginIsolated === true && typeof SharedArrayBuffer !== 'undefined'
+  );
+  const wasmEnv = hfEnv.backends.onnx.wasm;
+  if (wasmEnv) wasmEnv.numThreads = activeThreads;
+  else activeThreads = 1;
 
   return KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
     dtype,
@@ -103,7 +116,7 @@ async function init(pref: EnginePreference): Promise<void> {
     activeDtype = 'q8';
   }
 
-  post({ type: 'ready', device: activeDevice, dtype: activeDtype });
+  post({ type: 'ready', device: activeDevice, dtype: activeDtype, threads: activeThreads });
 }
 
 async function ensureReady(): Promise<KokoroTTS> {

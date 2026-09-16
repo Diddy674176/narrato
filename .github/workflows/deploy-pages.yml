@@ -77,6 +77,46 @@ jobs:
           path: narrato-voice-sample*.wav
           if-no-files-found: warn
 
+  # Proves the app works in a real browser: that the service worker makes the
+  # page cross-origin isolated (which is what gives the voice model more than
+  # one CPU core), and that the model still downloads and speaks under that
+  # isolation. Node-side voice checks cannot see any of this.
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+
+      # One step, so the preview server is a child of this shell and cannot be
+      # left running - or killed - between steps.
+      - name: UI, isolation, then a real in-browser synthesis
+        run: |
+          npx vite preview --port 4173 &
+          server=$!
+          trap 'kill $server' EXIT
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:4173/narrato/ >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4173/narrato/ >/dev/null || { echo 'preview server did not start'; exit 1; }
+          npm run test:e2e
+          npm run test:e2e:voice
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: .screenshots
+          if-no-files-found: ignore
+
   # Deploy only from the default branch; pull requests just get the checks above.
   deploy:
     if: github.event_name != 'pull_request'

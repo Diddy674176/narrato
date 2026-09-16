@@ -32,13 +32,16 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // Adds the two headers that make the page cross-origin isolated, which
+        // is what lets ONNX Runtime use WASM threads. See public/coi.js.
+        importScripts: ['coi.js'],
         // The Kokoro worker bundle is ~2.2 MB; the default 2 MB precache cap
         // would silently leave it out and break offline playback.
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         globPatterns: ['**/*.{js,css,html,ico,svg,woff2,mjs}'],
         // The ONNX runtime binary is ~21 MB - far too large to precache, but we
         // still want it available offline once it has been fetched.
-        globIgnores: ['**/*.wasm'],
+        globIgnores: ['**/*.wasm', '**/coi.js'],
         runtimeCaching: [
           {
             urlPattern: ({ url }: { url: URL }) => url.pathname.endsWith('.wasm'),

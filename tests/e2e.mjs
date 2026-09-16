@@ -51,6 +51,22 @@ page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 
 await page.goto(BASE, { waitUntil: 'networkidle' });
 
+// 0. Cross-origin isolation: the service worker adds the two headers the host
+// will not, and the app reloads once to pick them up. Without this the voice
+// model is stuck on a single CPU core, so it is worth asserting rather than
+// assuming - it is invisible when it silently stops working.
+await page
+  .waitForFunction(() => window.crossOriginIsolated === true, null, { timeout: 20000 })
+  .catch(() => {});
+const isolation = await page.evaluate(() => ({
+  isolated: window.crossOriginIsolated === true,
+  sab: typeof SharedArrayBuffer !== 'undefined',
+  controlled: !!navigator.serviceWorker.controller,
+}));
+check('service worker took control', isolation.controlled);
+check('page is cross-origin isolated', isolation.isolated, JSON.stringify(isolation));
+check('SharedArrayBuffer exists, so WASM threads are possible', isolation.sab);
+
 // 1. Empty library
 await page.waitForSelector('.empty h3', { timeout: 15000 });
 check('empty state shown', (await page.textContent('.empty h3')).includes('Nothing to listen'));

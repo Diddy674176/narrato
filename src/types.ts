@@ -218,6 +218,8 @@ export interface EngineStatus {
   device: KokoroDevice | null;
   /** Quantisation actually in use, once loaded. Part of the audio cache key. */
   dtype: string | null;
+  /** WASM threads in use. 1 means the page is not cross-origin isolated. */
+  threads: number | null;
   /** Model download progress, 0-1. */
   progress: number;
   message: string;

@@ -3,6 +3,7 @@ import type { HighlightMode, Settings, StartupMode, ThemeMode } from '../../type
 import { useApp } from '../../state/store';
 import * as db from '../../lib/db';
 import { kokoroClient } from '../../lib/tts/kokoro/client';
+import { threadsAvailable } from '../../lib/tts/isolation';
 import { DTYPE_SIZE_MB } from '../../lib/tts/kokoro/protocol';
 import { PronunciationEditor } from '../components/PronunciationEditor';
 import { Banner, Segmented, SettingRow, Sheet, Switch } from '../components/common';
@@ -368,6 +369,14 @@ export function SettingsScreen(): React.JSX.Element {
                 <div>Chunks: {open?.chunks.length ?? 0}</div>
                 <div>
                   WebGPU: {typeof navigator !== 'undefined' && 'gpu' in navigator ? 'yes' : 'no'}
+                </div>
+                <div data-testid="diag-threads">
+                  CPU threads:{' '}
+                  {engineStatus.threads
+                    ? `${engineStatus.threads} of ${navigator.hardwareConcurrency ?? '?'} cores`
+                    : threadsAvailable()
+                      ? 'available, engine not started'
+                      : 'single-threaded (page not isolated)'}
                 </div>
                 <div>
                   Media Session:{' '}

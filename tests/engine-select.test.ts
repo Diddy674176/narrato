@@ -5,7 +5,7 @@
  * a flagship phone running the voice model on its GPU and being pinned to the
  * slow path because its user agent says "Android".
  */
-import { resolveEnginePreference } from '../src/lib/tts/kokoro/protocol';
+import { resolveEnginePreference, wasmThreadCount } from '../src/lib/tts/kokoro/protocol';
 import type { DeviceCapabilities } from '../src/lib/tts/kokoro/protocol';
 
 let failures = 0;
@@ -92,6 +92,30 @@ console.log('\n--- WebGPU is available, but only on purpose ---');
 
   const pinned = resolveEnginePreference({ device: 'auto', dtype: 'q4f16' }, DESKTOP);
   check('an explicit precision is always respected', pinned.dtype === 'q4f16', pinned.dtype);
+}
+
+console.log('\n--- WASM threads: the biggest speed-up the CPU path has ---');
+{
+  // Without cross-origin isolation SharedArrayBuffer does not exist, so ONNX
+  // Runtime cannot thread at all, whatever the hardware says.
+  check('an un-isolated page gets one thread', wasmThreadCount(8, false) === 1);
+  check('however many cores it has', wasmThreadCount(16, false) === 1);
+
+  check('an isolated 8-core phone gets 4', wasmThreadCount(8, true) === 4, String(wasmThreadCount(8, true)));
+  check(
+    'a 16-core desktop is still capped at 4',
+    wasmThreadCount(16, true) === 4,
+    'more threads on one small model buys contention, not speed',
+  );
+  check('a 4-core device gets 2', wasmThreadCount(4, true) === 2, String(wasmThreadCount(4, true)));
+  check(
+    'half the cores, so efficiency cores and the UI still get time',
+    wasmThreadCount(6, true) === 3,
+    String(wasmThreadCount(6, true)),
+  );
+  check('a single-core device asks for one', wasmThreadCount(1, true) === 1);
+  check('an unknown core count is never 0 threads', wasmThreadCount(0, true) === 1);
+  check('and neither is a nonsense one', wasmThreadCount(Number.NaN, true) === 1);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);

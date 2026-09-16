@@ -1,4 +1,5 @@
 import type { EngineStatus, KokoroDevice } from '../../../types';
+import { abandonIsolation } from '../isolation';
 import type { EnginePreference, FromWorker, KokoroDtype, ToWorker } from './protocol';
 
 /**
@@ -52,6 +53,7 @@ class KokoroClient {
     state: 'idle',
     device: null,
     dtype: null,
+    threads: null,
     progress: 0,
     message: '',
     rtf: null,
@@ -70,6 +72,31 @@ class KokoroClient {
   private setStatus(patch: Partial<EngineStatus>): void {
     this.status = { ...this.status, ...patch };
     for (const fn of this.listeners) fn(this.status);
+  }
+
+  /**
+   * Start loading the model *if it has already been downloaded once*.
+   *
+   * Waiting for the first Play to start a 92 MB download is the difference
+   * between an app that speaks instantly on the second visit and one that
+   * always makes you wait. Warming only what is already on the device keeps
+   * that win without spending a stranger's mobile data on a maybe.
+   */
+  async warmIfCached(): Promise<void> {
+    if (this.initCalled || typeof caches === 'undefined') return;
+    try {
+      for (const name of await caches.keys()) {
+        if (!/transformers/i.test(name)) continue;
+        const cache = await caches.open(name);
+        const hit = (await cache.keys()).some((req) => req.url.includes('Kokoro-82M'));
+        if (hit) {
+          this.init();
+          return;
+        }
+      }
+    } catch {
+      /* no Cache Storage: the model loads on demand, as before */
+    }
   }
 
   /** Cross-origin isolation is not required, but WASM threads are faster with it. */
@@ -111,12 +138,22 @@ class KokoroClient {
           state: 'ready',
           device: msg.device,
           dtype: msg.dtype,
+          threads: msg.threads,
           progress: 1,
-          message: `Ready (${msg.device.toUpperCase()} / ${msg.dtype})`,
+          message:
+            `Ready (${msg.device.toUpperCase()} / ${msg.dtype}` +
+            (msg.threads > 1 ? `, ${msg.threads} threads)` : ')'),
         });
         break;
 
       case 'initError': {
+        // Isolation is what gives us threads, but it also changes how
+        // cross-origin requests are made. If the model cannot be fetched on an
+        // isolated page, isolation is the likeliest cause and speed is not
+        // worth a silent app: drop it and reload once, unisolated.
+        if (/failed to fetch|networkerror|load failed|blocked/i.test(msg.message)) {
+          void abandonIsolation();
+        }
         const friendly = describeInitFailure(msg.message);
         this.setStatus({ state: 'error', message: friendly });
         for (const [, p] of this.pending) p.reject(new Error(friendly));
@@ -174,7 +211,10 @@ class KokoroClient {
   reinit(pref: EnginePreference): void {
     this.dispose();
     this.initCalled = false;
-    this.status = { state: 'idle', device: null, dtype: null, progress: 0, message: '', rtf: null };
+    this.status = {
+      state: 'idle', device: null, dtype: null, threads: null,
+      progress: 0, message: '', rtf: null,
+    };
     this.init(pref);
   }
 

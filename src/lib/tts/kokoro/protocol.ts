@@ -22,7 +22,7 @@ export type ToWorker =
 
 export type FromWorker =
   | { type: 'progress'; progress: number; message: string }
-  | { type: 'ready'; device: KokoroDevice; dtype: KokoroDtype }
+  | { type: 'ready'; device: KokoroDevice; dtype: KokoroDtype; threads: number }
   | { type: 'initError'; message: string }
   | {
       type: 'result';
@@ -93,4 +93,23 @@ export function resolveEnginePreference(
   }
 
   return { device, dtype };
+}
+
+/**
+ * How many WASM threads to give ONNX Runtime.
+ *
+ * Threads only exist on a cross-origin isolated page, so this is 1 whenever
+ * SharedArrayBuffer is missing - the state every static host leaves you in
+ * until something adds the isolation headers.
+ *
+ * Where they do exist, half the cores (capped at 4) rather than all of them.
+ * A phone's core count includes efficiency cores that contribute little to a
+ * matmul, and saturating every core on a device held in a hand trades a small
+ * speed gain for thermal throttling and a UI thread fighting for time - which
+ * is a stutter, the one thing a book reader must not do.
+ */
+export function wasmThreadCount(cores: number, isolated: boolean): number {
+  if (!isolated) return 1;
+  if (!Number.isFinite(cores) || cores < 2) return 1;
+  return Math.max(1, Math.min(4, Math.floor(cores / 2)));
 }
