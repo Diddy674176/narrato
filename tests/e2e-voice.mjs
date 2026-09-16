@@ -45,8 +45,16 @@ const isolated = await page.evaluate(() => window.crossOriginIsolated === true);
 check('page is cross-origin isolated before the model loads', isolated);
 
 // --- download the model through the browser ---
-await page.goto(`${BASE}#/voices`, { waitUntil: 'networkidle' });
-await page.click('text=Download the free voice model', { timeout: 20000 });
+// Navigate the way a person does. A hash-only goto can resolve before the
+// screen has rendered, which is what made this time out the first time.
+await page.click('nav.nav >> text=Voices');
+await page.waitForSelector('text=Voice engine', { timeout: 20000 });
+
+// Selecting the Kokoro engine is itself what starts the download; the
+// explicit button only exists when the engine is selected but idle.
+await page.click('.card >> text=Kokoro AI', { timeout: 20000 });
+const startButton = page.locator('text=Download the free voice model');
+if (await startButton.isVisible().catch(() => false)) await startButton.click();
 console.log('downloading model in-browser (this is the slow part)...');
 
 await page.waitForSelector('text=Voice engine ready', { timeout: 15 * 60 * 1000 });
@@ -68,12 +76,23 @@ if (!(await diagSwitch.isChecked().catch(() => false))) await diagSwitch.click()
 
 const threadLine = await page.textContent('[data-testid="diag-threads"]');
 const threads = Number(/CPU threads:\s*(\d+)/.exec(threadLine ?? '')?.[1] ?? 0);
+const cores = await page.evaluate(() => navigator.hardwareConcurrency ?? 0);
 console.log(`diagnostics: ${threadLine}`);
+
+// Assert the policy, not a number: a CI runner has far fewer cores than a
+// phone, and hard-coding "more than one" would fail on a 2-core box for a
+// reason that has nothing to do with the code under test.
+const expected = cores < 2 ? 1 : Math.max(1, Math.min(4, Math.floor(cores / 2)));
 check(
-  'the engine runs multi-threaded on an isolated page',
-  threads > 1,
-  `${threadLine} - a single thread means isolation or the thread policy regressed`,
+  `the engine took the threads the policy allows (${threads} of ${cores} cores)`,
+  threads === expected,
+  `${threadLine} - expected ${expected}`,
 );
+if (cores >= 4) {
+  check('which on a machine this size means more than one', threads > 1, String(threads));
+} else {
+  console.log(`note: ${cores}-core machine, so 1 thread is the correct outcome here`);
+}
 
 const rtf = Number(/Real-time factor:\s*([\d.]+)x/.exec(await page.textContent('body'))?.[1] ?? 0);
 console.log(`measured real-time factor in-browser: ${rtf || 'not measured'}`);
