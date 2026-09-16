@@ -61,36 +61,31 @@ export interface DeviceCapabilities {
 /**
  * Resolve 'auto' into a concrete device/dtype pair.
  *
- * The rule used to key off the user agent: any phone got WASM. That treats a
- * flagship with a desktop-class GPU exactly like a budget handset and denies
- * it the single biggest speed-up available. Capability decides instead - we
- * use WebGPU whenever the browser exposes it and the core count suggests the
- * device is not entry-level.
+ * Auto deliberately picks the *verified* path - WASM + q8 - on every device,
+ * including flagships whose GPU would be faster. Kokoro's WebGPU output is
+ * only as good as the browser's WebGPU fp16 support, and a reader reported
+ * badly distorted speech on a current flagship phone that auto had put on
+ * WebGPU. Speech that is fast and unlistenable is worth nothing, and nothing
+ * available here can verify browser WebGPU output: CI checks the weights on
+ * CPU, which is a different backend entirely.
  *
- * Phones on WebGPU take fp16 (163 MB) rather than fp32 (326 MB): GPUs compute
- * in fp16 natively, and halving a one-time download matters far more on a
- * phone than on a laptop. Any initialisation failure falls back to WASM + q8,
- * so the worst case is exactly what the device would have got anyway.
+ * WebGPU therefore stays a deliberate choice in Settings rather than a default
+ * inflicted on people, and an initialisation failure still falls back to
+ * WASM + q8.
  */
 export function resolveEnginePreference(
   pref: EnginePreference,
   caps: DeviceCapabilities
 ): { device: KokoroDevice; dtype: KokoroDtype } {
-  // A phone with this many cores is a flagship, not an entry-level device.
-  const CAPABLE_MOBILE_CORES = 6;
-  const capable = !caps.isMobile || caps.cores >= CAPABLE_MOBILE_CORES;
-
-  let device: KokoroDevice;
-  if (pref.device === 'auto') {
-    device = caps.hasWebGpu && capable ? 'webgpu' : 'wasm';
-  } else {
-    device = pref.device;
-  }
-  // Never hand ONNX Runtime a backend the browser does not have.
-  if (device === 'webgpu' && !caps.hasWebGpu) device = 'wasm';
+  const device: KokoroDevice =
+    pref.device === 'auto' || (pref.device === 'webgpu' && !caps.hasWebGpu)
+      ? 'wasm'
+      : pref.device;
 
   let dtype: KokoroDtype;
   if (pref.dtype === 'auto') {
+    // A GPU computes in fp16 natively, and on a phone it also halves a
+    // one-time download; WASM takes the small quantised weights.
     if (device === 'webgpu') dtype = caps.isMobile ? 'fp16' : 'fp32';
     else dtype = 'q8';
   } else {

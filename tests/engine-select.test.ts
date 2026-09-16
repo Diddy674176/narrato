@@ -27,19 +27,25 @@ const DESKTOP: DeviceCapabilities = { hasWebGpu: true, isMobile: false, cores: 1
 const OLD_DESKTOP: DeviceCapabilities = { hasWebGpu: false, isMobile: false, cores: 4 };
 const UNKNOWN_CORES: DeviceCapabilities = { hasWebGpu: true, isMobile: true, cores: 0 };
 
-console.log('--- a flagship phone is not treated as entry-level ---');
+console.log('--- auto takes the verified path, even on a flagship ---');
 {
-  // A Galaxy S26 Ultra class device: 8 cores, WebGPU in Chrome.
+  // A Galaxy S26 Ultra class device: 8 cores, WebGPU in Chrome. Auto used to
+  // hand it WebGPU + fp16; a reader reported badly distorted speech, so auto
+  // now picks what CI actually verifies.
   const got = resolveEnginePreference(AUTO, FLAGSHIP_PHONE);
-  check('a capable phone gets WebGPU, not WASM', got.device === 'webgpu', got.device);
   check(
-    'and fp16 rather than a 326 MB fp32 download',
-    got.dtype === 'fp16',
-    `${got.dtype} - GPUs compute in fp16 natively and the download halves`,
+    'a capable phone gets WASM, not an unverified WebGPU path',
+    got.device === 'wasm',
+    `${got.device} - fast but distorted speech is worth nothing`,
   );
+  check('with the quantised weights CI exercises', got.dtype === 'q8', got.dtype);
+
+  const desktop = resolveEnginePreference(AUTO, DESKTOP);
+  check('a desktop with WebGPU is treated the same way', desktop.device === 'wasm', desktop.device);
+  check('and also takes q8', desktop.dtype === 'q8', desktop.dtype);
 }
 
-console.log('\n--- weaker devices keep the safe path ---');
+console.log('\n--- weaker devices are unchanged ---');
 {
   const budget = resolveEnginePreference(AUTO, BUDGET_PHONE);
   check('a low-core phone stays on WASM', budget.device === 'wasm', budget.device);
@@ -48,33 +54,31 @@ console.log('\n--- weaker devices keep the safe path ---');
   const old = resolveEnginePreference(AUTO, OLD_PHONE);
   check('a phone without WebGPU stays on WASM', old.device === 'wasm', old.device);
 
-  const unknown = resolveEnginePreference(AUTO, UNKNOWN_CORES);
-  check(
-    'an unknown core count is treated conservatively',
-    unknown.device === 'wasm',
-    'guessing high on an unknown phone risks a 163 MB download it cannot use',
-  );
-}
-
-console.log('\n--- desktops take the documented fast path ---');
-{
-  const desktop = resolveEnginePreference(AUTO, DESKTOP);
-  check('desktop uses WebGPU', desktop.device === 'webgpu');
-  check('desktop uses fp32, where download size matters least', desktop.dtype === 'fp32');
-
   const oldDesktop = resolveEnginePreference(AUTO, OLD_DESKTOP);
   check('a desktop without WebGPU falls back to WASM + q8',
     oldDesktop.device === 'wasm' && oldDesktop.dtype === 'q8');
+
+  const unknown = resolveEnginePreference(AUTO, UNKNOWN_CORES);
+  check('an unknown core count needs no special case now', unknown.device === 'wasm');
 }
 
-console.log('\n--- explicit choices are honoured, but never impossible ones ---');
+console.log('\n--- WebGPU is available, but only on purpose ---');
 {
-  const forcedWasm = resolveEnginePreference({ device: 'wasm', dtype: 'auto' }, FLAGSHIP_PHONE);
-  check('choosing WASM overrides the capable-device default', forcedWasm.device === 'wasm');
-  check('and takes q8 to match', forcedWasm.dtype === 'q8');
+  const forcedGpu = resolveEnginePreference({ device: 'webgpu', dtype: 'auto' }, FLAGSHIP_PHONE);
+  check('choosing WebGPU is honoured', forcedGpu.device === 'webgpu', forcedGpu.device);
+  check(
+    'and a phone takes fp16 rather than a 326 MB fp32 download',
+    forcedGpu.dtype === 'fp16',
+    forcedGpu.dtype,
+  );
 
-  const forcedGpu = resolveEnginePreference({ device: 'webgpu', dtype: 'auto' }, BUDGET_PHONE);
-  check('choosing WebGPU overrides the core-count heuristic', forcedGpu.device === 'webgpu');
+  const gpuDesktop = resolveEnginePreference({ device: 'webgpu', dtype: 'auto' }, DESKTOP);
+  check('a desktop on WebGPU takes fp32, where size matters least',
+    gpuDesktop.dtype === 'fp32', gpuDesktop.dtype);
+
+  const forcedWasm = resolveEnginePreference({ device: 'wasm', dtype: 'auto' }, FLAGSHIP_PHONE);
+  check('choosing WASM explicitly still works', forcedWasm.device === 'wasm');
+  check('and takes q8 to match', forcedWasm.dtype === 'q8');
 
   // Asking for a backend the browser does not have would fail at load; the
   // policy corrects it rather than handing ONNX Runtime something impossible.

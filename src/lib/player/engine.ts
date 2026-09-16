@@ -308,7 +308,10 @@ export class AudiobookEngine {
   setRate(rate: number): void {
     this.rate = Math.max(0.5, Math.min(3, rate));
     if (this.audio) {
-      this.audio.playbackRate = this.rate * (this.preset?.rateBias ?? 1);
+      // rateBias is baked into the generated audio (it is Kokoro's own `speed`
+      // argument), so applying it again here would resample a second time -
+      // audibly warbly at the slower presets.
+      this.audio.playbackRate = this.rate;
       this.audio.preservesPitch = true;
     }
     this.schedulePump();
@@ -635,7 +638,8 @@ export class AudiobookEngine {
     }
 
     const el = this.ensureAudio();
-    el.playbackRate = this.rate * (this.preset?.rateBias ?? 1);
+    // See setRate: the preset's rate bias is already in the samples.
+    el.playbackRate = this.rate;
     el.preservesPitch = true;
     el.volume = this.volume;
 

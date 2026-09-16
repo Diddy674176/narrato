@@ -314,7 +314,7 @@ export function SettingsScreen(): React.JSX.Element {
               <>
                 <SettingRow
                   label="Voice backend"
-                  hint="WebGPU is far faster where supported. Auto uses it on desktop and keeps phones on WASM, whose weights are a much smaller download."
+                  hint="Auto uses WASM, the path that is verified before every release. WebGPU is much faster where it works, but its output quality depends on your browser's GPU support - try it, and switch back if the voice sounds distorted."
                 >
                   <select
                     className="select"

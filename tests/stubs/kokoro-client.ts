@@ -1,6 +1,8 @@
 // Fake Kokoro client: records the order chunks were requested in.
 export const calls: string[] = [];
 export const requested: number[] = [];
+/** Speed argument of each generate call - the rate baked into the samples. */
+export const speeds: number[] = [];
 export let failNext = 0;
 export function setFailNext(n: number): void { failNext = n; }
 
@@ -20,8 +22,9 @@ export const kokoroClient = {
   subscribe(fn: (s: unknown) => void) { fn(this.getStatus()); return () => {}; },
   init() {},
   reinit() {},
-  async generate(text: string, voice: string) {
+  async generate(text: string, voice: string, speed = 1) {
     calls.push(`${voice}:${text.slice(0, 12)}`);
+    speeds.push(speed);
     const m = /__IDX(\d+)__/.exec(text);
     if (m) requested.push(Number(m[1]));
     if (failNext > 0) { failNext--; throw new Error('simulated failure'); }

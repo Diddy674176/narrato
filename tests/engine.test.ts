@@ -54,7 +54,7 @@ class FakeAudio {
 
 import type { Chapter, DocMeta, TextChunk, VoicePreset } from '../src/types';
 import { AudiobookEngine } from '../src/lib/player/engine';
-import { calls, requested, setFailNext, setDelayMs, setRtf } from './stubs/kokoro-client';
+import { calls, requested, speeds, setFailNext, setDelayMs, setRtf } from './stubs/kokoro-client';
 import {
   store as audioStore,
   stats as dbStats,
@@ -102,10 +102,10 @@ const CHAPTERS: Chapter[] = [
   { index: 1, title: 'Two', text: 'y' },
 ];
 
-async function boot(rate = 1) {
+async function boot(rate = 1, preset: VoicePreset = PRESET) {
   const engine = new AudiobookEngine();
   engine.configure({
-    preset: PRESET, mode: 'kokoro', rate, volume: 1,
+    preset, mode: 'kokoro', rate, volume: 1,
     startupMode: 'balanced', skipSeconds: 15, deviceVoiceURI: null,
   });
   const chunks = makeChunks();
@@ -198,6 +198,38 @@ console.log('\n--- rate scales the buffer target ---');
     Math.abs(fastTarget - slowTarget * 2) < 0.01,
     `1x=${slowTarget} 2x=${fastTarget}`,
   );
+}
+
+// ------------------------------------------------------------------
+console.log('\n--- a preset\'s rate bias is applied exactly once ---');
+{
+  // Kokoro renders at the preset's bias (it is the model's own `speed`), so
+  // multiplying playbackRate by it again resamples already-slowed audio -
+  // which is audible as warbling, and worse the further the bias is from 1.
+  const slowPreset: VoicePreset = { ...PRESET, id: 'k_slow', rateBias: 0.88 };
+  speeds.length = 0;
+  const { engine } = await boot(1.5, slowPreset);
+  await engine.play();
+  await sleep(60);
+
+  check(
+    'the bias reaches the model as its speed argument',
+    speeds.length > 0 && Math.abs(speeds[0]! - 0.88) < 0.001,
+    `speed=${speeds[0]}`,
+  );
+  check(
+    'playback runs at the listener\'s rate, not rate x bias',
+    Math.abs(currentEl().playbackRate - 1.5) < 0.001,
+    `playbackRate=${currentEl().playbackRate} (1.32 would be the bias applied twice)`,
+  );
+
+  engine.setRate(2);
+  check(
+    'and changing speed later keeps it that way',
+    Math.abs(currentEl().playbackRate - 2) < 0.001,
+    `playbackRate=${currentEl().playbackRate}`,
+  );
+  engine.destroy();
 }
 
 // ------------------------------------------------------------------
