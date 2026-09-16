@@ -28,6 +28,9 @@ import { makeId } from '../lib/hash';
 import { engine } from '../lib/player/engine';
 import type { PlayerSnapshot } from '../lib/player/engine';
 import { kokoroClient } from '../lib/tts/kokoro/client';
+import { startKeepAlive } from '../lib/player/keepAlive';
+import type { KeepAlive } from '../lib/player/keepAlive';
+import { formatDuration } from '../lib/format';
 import { DEFAULT_PRESET_ID, getPreset } from '../lib/tts/voices';
 
 /**
@@ -102,8 +105,38 @@ interface AppValue {
   addRule: (rule: Omit<PronunciationRule, 'id'>) => Promise<void>;
   removeRule: (id: string) => Promise<void>;
 
+  /**
+   * Bulk preparation, owned here rather than by the sheet that starts it.
+   *
+   * A job that lives in a component dies when that component unmounts - so
+   * closing the sheet used to cancel a two-hour generation, and there was
+   * nowhere to see progress from anywhere else in the app.
+   */
+  prepare: PrepareJob | null;
+  startPrepare: (scope: 'chapter' | 'book') => Promise<void>;
+  stopPrepare: () => void;
+
   toast: string | null;
   showToast: (message: string) => void;
+}
+
+export interface PrepareJob {
+  docId: string;
+  title: string;
+  scope: 'chapter' | 'book';
+  done: number;
+  total: number;
+  /** Seconds remaining, measured from this run's own rate. Null until known. */
+  etaSec: number | null;
+  /** True when an audio session is held, so the work survives backgrounding. */
+  background: boolean;
+  /**
+   * Stop was pressed but the section being generated has not finished.
+   *
+   * Cancellation is checked between sections, so on a phone this lasts a few
+   * seconds. Saying so beats a button that appears to have done nothing.
+   */
+  stopping: boolean;
 }
 
 const AppContext = createContext<AppValue | null>(null);
@@ -531,6 +564,95 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     };
   }, []);
 
+  /* ---------------------------------------------------------------- *
+   * Bulk preparation
+   * ---------------------------------------------------------------- */
+
+  const [prepare, setPrepare] = useState<PrepareJob | null>(null);
+  const prepareCancel = useRef(false);
+  const prepareKeepAlive = useRef<KeepAlive | null>(null);
+
+  const stopPrepare = useCallback(() => {
+    prepareCancel.current = true;
+    setPrepare((job) => (job ? { ...job, stopping: true } : job));
+  }, []);
+
+  const startPrepare = useCallback(
+    async (scope: 'chapter' | 'book') => {
+      if (!open || prepare) return;
+      prepareCancel.current = false;
+
+      // Taken inside the tap that started this: playing even a silent track is
+      // subject to autoplay policy, and after the first await the gesture is
+      // gone. Skipped while something is already playing - that audio already
+      // holds the page open, and the notification belongs to the book.
+      if (engine.snapshot().status !== 'playing') {
+        prepareKeepAlive.current = startKeepAlive(open.meta.title, stopPrepare);
+      }
+
+      const startedAt = Date.now();
+      setPrepare({
+        docId: open.meta.id,
+        title: open.meta.title,
+        scope,
+        done: 0,
+        total: 0,
+        etaSec: null,
+        background: prepareKeepAlive.current?.holding ?? false,
+        stopping: false,
+      });
+
+      try {
+        const result = await engine.prepareRange(
+          scope,
+          (done, total) => {
+            // Measured, not predicted: generation speed depends on the phone,
+            // what else it is doing, and how warm it has become, so the only
+            // honest estimate is the rate this run is achieving.
+            const etaSec =
+              done >= 2 && total > done
+                ? (((Date.now() - startedAt) / done) * (total - done)) / 1000
+                : null;
+            setPrepare((job) => (job ? { ...job, done, total, etaSec } : job));
+            if (total > 0) {
+              const pct = Math.round((done / total) * 100);
+              prepareKeepAlive.current?.update(
+                etaSec === null
+                  ? `Preparing ${pct}% - ${total - done} sections left`
+                  : `Preparing ${pct}% - about ${formatDuration(etaSec)} left`
+              );
+            }
+          },
+          () => prepareCancel.current
+        );
+
+        if (prepareCancel.current) {
+          showToast('Stopped preparing. Everything generated so far is saved.');
+        } else if (result.failed > 0) {
+          showToast(
+            `${result.failed} of ${result.total} sections could not be generated. The rest are saved.`
+          );
+        } else {
+          showToast(
+            scope === 'chapter' ? 'Chapter ready to play offline.' : 'Whole book ready to play offline.'
+          );
+        }
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'Preparation failed.');
+      } finally {
+        prepareKeepAlive.current?.stop();
+        prepareKeepAlive.current = null;
+        setPrepare(null);
+      }
+    },
+    [open, prepare, showToast, stopPrepare]
+  );
+
+  // Switching books abandons a run that was about the previous one.
+  useEffect(() => {
+    if (prepare && open?.meta.id !== prepare.docId) prepareCancel.current = true;
+  }, [open, prepare]);
+
   const value: AppValue = {
     ready,
     settings,
@@ -558,6 +680,9 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     rules,
     addRule,
     removeRule,
+    prepare,
+    startPrepare,
+    stopPrepare,
     toast,
     showToast,
   };

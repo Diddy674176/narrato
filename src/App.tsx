@@ -7,6 +7,7 @@ import { ReaderScreen } from './ui/screens/ReaderScreen';
 import { VoicesScreen } from './ui/screens/VoicesScreen';
 import { SettingsScreen } from './ui/screens/SettingsScreen';
 import { MiniPlayer } from './ui/components/MiniPlayer';
+import { PrepareBar } from './ui/components/PrepareBar';
 import { PlayerSheet } from './ui/components/PlayerSheet';
 import './styles.css';
 
@@ -127,6 +128,7 @@ function Shell(): React.JSX.Element {
       {tab === 'voices' ? <VoicesScreen onBack={() => setTab('library')} /> : null}
       {tab === 'settings' ? <SettingsScreen /> : null}
 
+      <PrepareBar />
       <MiniPlayer onExpand={() => setPlayerOpen(true)} />
       {playerOpen ? <PlayerSheet onClose={() => setPlayerOpen(false)} /> : null}
 

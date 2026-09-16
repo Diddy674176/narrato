@@ -236,6 +236,66 @@ check(
 );
 await page.screenshot({ path: `${SHOT}/13-offline-library.png` });
 
+// 14. Preparation survives the sheet that started it.
+//
+// The run used to belong to the sheet, so closing it cancelled an hour of
+// generating - and there was nowhere else in the app to see that anything was
+// happening.
+//
+// Holding the model request open is what keeps a job running here: this
+// environment cannot download the model, and a generation that fails
+// instantly would end the job for reasons that have nothing to do with the
+// sheet. The route has to be in place before the page loads, since the app
+// starts loading the model on open - hence the reload.
+await page.route('**huggingface.co/**', () => {
+  /* never resolved: the engine stays loading, so generation stays pending */
+});
+await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+await page.waitForSelector('.doc-card', { timeout: 20000 });
+await page.click('.doc-card');
+await page.waitForSelector('.reader', { timeout: 20000 });
+await page.click('text=Prepare audio');
+await page.waitForSelector('.sheet');
+await page.locator('.sheet .chip', { hasText: 'Whole document' }).first().click();
+await page.getByRole('button', { name: 'Prepare whole document' }).click();
+
+await page.waitForSelector('[data-testid="prepare-bar"]', { timeout: 10000 });
+check('preparing shows an app-wide progress bar', true);
+
+await page.click('.sheet .icon-btn >> nth=0');
+await page.waitForSelector('.sheet', { state: 'detached', timeout: 10000 });
+await page.waitForTimeout(500);
+check(
+  'closing the sheet does not cancel the run',
+  await page.locator('[data-testid="prepare-bar"]').isVisible(),
+  'an hour of generating should not end because a sheet was dismissed',
+);
+
+await page.click('nav.nav >> text=Library');
+await page.waitForTimeout(400);
+check(
+  'and progress is visible from other screens',
+  await page.locator('[data-testid="prepare-bar"]').isVisible(),
+);
+const barText = await page.textContent('[data-testid="prepare-bar"]');
+check('the bar names the book being prepared', /Lantern Room/.test(barText), barText);
+check('and offers a way to stop it', /Stop/.test(barText), barText);
+
+// Cancellation is checked between sections, so a section already being
+// generated has to finish first - here it never will, because the model
+// request is stalled on purpose. What matters is that the press is
+// acknowledged rather than appearing to do nothing.
+await page.click('[data-testid="prepare-bar"] >> text=Stop');
+await page.waitForTimeout(500);
+const stoppingText = await page.textContent('[data-testid="prepare-bar"]');
+check(
+  'pressing stop is acknowledged immediately',
+  /stopping/i.test(stoppingText),
+  stoppingText,
+);
+await page.screenshot({ path: `${SHOT}/14-prepare-bar.png` });
+await page.unroute('**huggingface.co/**');
+
 const realErrors = errors.filter(
   (e) => !/favicon|manifest|Download the React DevTools/i.test(e),
 );

@@ -1,7 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { engine } from '../../lib/player/engine';
-import { startKeepAlive } from '../../lib/player/keepAlive';
-import type { KeepAlive } from '../../lib/player/keepAlive';
 import { useApp } from '../../state/store';
 import { AUDIO_BYTES_PER_SEC, storageEstimate } from '../../lib/db';
 import { formatDuration } from '../../lib/format';
@@ -20,18 +18,17 @@ function formatBytes(bytes: number): string {
  * buffering stall. Playback keeps priority throughout.
  */
 export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.Element {
-  const { open, settings, showToast, player, engineStatus } = useApp();
+  const { open, settings, player, engineStatus, prepare, startPrepare, stopPrepare } = useApp();
   const [scope, setScope] = useState<'chapter' | 'book'>('chapter');
-  const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [cached, setCached] = useState<{ cached: number; total: number } | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [space, setSpace] = useState<{ usage: number; quota: number } | null>(null);
-  const [background, setBackground] = useState(false);
-  const [eta, setEta] = useState<number | null>(null);
-  const cancelled = useRef(false);
-  const keepAlive = useRef<KeepAlive | null>(null);
-  const startedAt = useRef(0);
+
+  // The run itself lives in the store, so closing this sheet - or walking off
+  // to another screen - leaves it going. Only the reader stops it.
+  const running = prepare !== null;
+  const progress = prepare ? { done: prepare.done, total: prepare.total } : null;
+  const eta = prepare?.etaSec ?? null;
+  const background = prepare?.background ?? false;
 
   useEffect(() => {
     void storageEstimate().then(setSpace);
@@ -48,84 +45,6 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
       alive = false;
     };
   }, [scope, running]);
-
-  // A half-finished run should stop if the sheet goes away - and must never
-  // leave a silent audio session holding the page open behind it.
-  useEffect(() => () => {
-    cancelled.current = true;
-    keepAlive.current?.stop();
-    keepAlive.current = null;
-  }, []);
-
-  const start = async () => {
-    setError(null);
-    setRunning(true);
-    cancelled.current = false;
-    setProgress({ done: 0, total: 0 });
-
-    startedAt.current = Date.now();
-    setEta(null);
-
-    // Must be taken inside the tap: playing even a silent track is subject to
-    // autoplay policy, and after the first await the gesture is gone. Skipped
-    // while something is already playing, because that audio is already
-    // holding the page open and the notification belongs to the book.
-    if (player.status !== 'playing' && open) {
-      keepAlive.current = startKeepAlive(open.meta.title, () => {
-        cancelled.current = true;
-      });
-      setBackground(keepAlive.current.holding);
-    }
-
-    try {
-      const result = await engine.prepareRange(
-        scope,
-        (done, total) => {
-          setProgress({ done, total });
-
-          // Measured, not predicted: generation speed depends on the phone,
-          // what else it is doing, and how warm it is, so the only honest
-          // estimate is the rate this run is actually achieving.
-          let remainingSec: number | null = null;
-          if (done >= 2 && total > done) {
-            const perSection = (Date.now() - startedAt.current) / done;
-            remainingSec = (perSection * (total - done)) / 1000;
-            setEta(remainingSec);
-          }
-
-          if (total > 0) {
-            const pct = Math.round((done / total) * 100);
-            keepAlive.current?.update(
-              remainingSec === null
-                ? `Preparing ${pct}% - ${total - done} sections left`
-                : `Preparing ${pct}% - about ${formatDuration(remainingSec)} left`
-            );
-          }
-        },
-        () => cancelled.current
-      );
-      if (cancelled.current) {
-        showToast('Stopped. Everything generated so far is saved.');
-      } else if (result.failed > 0) {
-        setError(
-          `${result.failed} of ${result.total} sections could not be generated. The rest are saved and will play normally.`
-        );
-      } else {
-        showToast(
-          scope === 'chapter' ? 'Chapter ready to play offline.' : 'Whole book ready to play offline.'
-        );
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Preparation failed.');
-    } finally {
-      keepAlive.current?.stop();
-      keepAlive.current = null;
-      setBackground(false);
-      setRunning(false);
-      setProgress(null);
-      setEta(null);
-    }
-  };
 
   const chapterCount = open?.chapters.length ?? 0;
   const fraction = progress && progress.total > 0 ? progress.done / progress.total : 0;
@@ -244,20 +163,15 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
             </div>
           ) : null}
 
-          {error ? <Banner kind="error">{error}</Banner> : null}
+
 
           <div className="btn-row" style={{ marginTop: 14 }}>
             {running ? (
-              <button
-                className="btn btn-block"
-                onClick={() => {
-                  cancelled.current = true;
-                }}
-              >
+              <button className="btn btn-block" onClick={stopPrepare}>
                 Stop (keep what is done)
               </button>
             ) : (
-              <button className="btn btn-primary btn-block" onClick={() => void start()}>
+              <button className="btn btn-primary btn-block" onClick={() => void startPrepare(scope)}>
                 {scope === 'chapter' ? 'Prepare this chapter' : 'Prepare whole document'}
               </button>
             )}
