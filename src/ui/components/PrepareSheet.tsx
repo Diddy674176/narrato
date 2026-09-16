@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { engine } from '../../lib/player/engine';
+import { startKeepAlive } from '../../lib/player/keepAlive';
+import type { KeepAlive } from '../../lib/player/keepAlive';
 import { useApp } from '../../state/store';
 import { AUDIO_BYTES_PER_SEC, storageEstimate } from '../../lib/db';
 import { formatDuration } from '../../lib/format';
@@ -25,7 +27,9 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
   const [cached, setCached] = useState<{ cached: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [space, setSpace] = useState<{ usage: number; quota: number } | null>(null);
+  const [background, setBackground] = useState(false);
   const cancelled = useRef(false);
+  const keepAlive = useRef<KeepAlive | null>(null);
 
   useEffect(() => {
     void storageEstimate().then(setSpace);
@@ -43,9 +47,12 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
     };
   }, [scope, running]);
 
-  // A half-finished run should stop if the sheet goes away.
+  // A half-finished run should stop if the sheet goes away - and must never
+  // leave a silent audio session holding the page open behind it.
   useEffect(() => () => {
     cancelled.current = true;
+    keepAlive.current?.stop();
+    keepAlive.current = null;
   }, []);
 
   const start = async () => {
@@ -53,10 +60,29 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
     setRunning(true);
     cancelled.current = false;
     setProgress({ done: 0, total: 0 });
+
+    // Must be taken inside the tap: playing even a silent track is subject to
+    // autoplay policy, and after the first await the gesture is gone. Skipped
+    // while something is already playing, because that audio is already
+    // holding the page open and the notification belongs to the book.
+    if (player.status !== 'playing' && open) {
+      keepAlive.current = startKeepAlive(open.meta.title, () => {
+        cancelled.current = true;
+      });
+      setBackground(keepAlive.current.holding);
+    }
+
     try {
       const result = await engine.prepareRange(
         scope,
-        (done, total) => setProgress({ done, total }),
+        (done, total) => {
+          setProgress({ done, total });
+          if (total > 0) {
+            keepAlive.current?.update(
+              `Preparing ${Math.round((done / total) * 100)}% - ${total - done} sections left`
+            );
+          }
+        },
         () => cancelled.current
       );
       if (cancelled.current) {
@@ -73,6 +99,9 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Preparation failed.');
     } finally {
+      keepAlive.current?.stop();
+      keepAlive.current = null;
+      setBackground(false);
       setRunning(false);
       setProgress(null);
     }
@@ -105,7 +134,8 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
         <>
           <p className="small muted">
             Generate audio now and keep it on this device. Prepared sections play instantly and
-            work with no connection at all.
+            work with no connection at all. Start a whole document, then lock the phone or go
+            and do something else - it keeps generating in the background.
           </p>
 
           <div className="chip-row" style={{ margin: '12px 0' }}>
@@ -170,6 +200,13 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
               <p className="small muted" style={{ margin: '8px 0 0' }}>
                 You can keep listening while this runs. Playback always takes priority.
               </p>
+              {background ? (
+                <p className="small" style={{ margin: '8px 0 0', color: 'var(--accent)' }}>
+                  Safe to put the phone down, lock it, or switch apps - this keeps going, and
+                  shows progress in your notifications. Closing Narrato completely stops it;
+                  reopening picks up where it left off.
+                </p>
+              ) : null}
             </div>
           ) : null}
 

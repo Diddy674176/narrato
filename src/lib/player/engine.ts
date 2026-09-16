@@ -17,6 +17,7 @@ import {
 } from '../db';
 import { hashText } from '../hash';
 import { kokoroClient } from '../tts/kokoro/client';
+import { silentWavUrl } from './silence';
 import { MODEL_VERSION } from '../tts/kokoro/protocol';
 import { matchSystemVoice } from '../tts/voices';
 import { generatePremium } from '../tts/premium';
@@ -125,35 +126,23 @@ const LOW_BATTERY = 0.2;
 
 
 /**
- * A fraction of a second of silence, used to unlock the audio element.
+ * Yield to the event loop without using a timer.
  *
- * Mobile browsers only allow programmatic playback on an element that has
- * already played during a real user gesture. Our first real chunk may take
- * several seconds to generate - long after the gesture has expired - so we
- * play this silent clip synchronously inside the tap instead.
+ * A hidden page has its timers throttled - `setTimeout(fn, 0)` can become
+ * once a second, or once a minute - which would reduce background preparation
+ * to a crawl exactly when the user has put the phone down and walked away.
+ * Message ports are not throttled, so this keeps the loop responsive while
+ * still letting the UI and audio events run.
  */
-function silentWavUrl(): string {
-  const sampleRate = 8000;
-  const samples = 400;
-  const buffer = new ArrayBuffer(44 + samples * 2);
-  const view = new DataView(buffer);
-  const ascii = (offset: number, text: string) => {
-    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
-  };
-  ascii(0, 'RIFF');
-  view.setUint32(4, 36 + samples * 2, true);
-  ascii(8, 'WAVE');
-  ascii(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  ascii(36, 'data');
-  view.setUint32(40, samples * 2, true);
-  return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      resolve();
+    };
+    channel.port2.postMessage(null);
+  });
 }
 
 let SILENT_URL: string | null = null;
@@ -1322,7 +1311,7 @@ export class AudiobookEngine {
         this.trimMemory();
         cursor++;
         this.emit();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await yieldToEventLoop();
       }
     } finally {
       this.autoPrepareRunning = false;
@@ -1398,8 +1387,9 @@ export class AudiobookEngine {
       }
       done++;
       onProgress(done, total);
-      // Yield so the UI can paint progress and stay responsive.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Yield so the UI can paint progress and stay responsive - without a
+      // timer, which a backgrounded page would throttle.
+      await yieldToEventLoop();
     }
 
     // Hand the work back to the background loop if the reader is still going.

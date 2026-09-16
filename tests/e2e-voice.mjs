@@ -39,7 +39,81 @@ const browser = await chromium.launch({
  * isolation, which keeps the page single-threaded without touching any code
  * paths a real user would not hit.
  */
-async function runPass({ isolate, label }) {
+const SAMPLE = `Chapter One
+
+The harbour bell rang twice before the fog lifted. Marcus stood at the rail and watched the water turn from grey to silver, and said nothing at all for a long while.
+
+"We should go now," said Marcus. Elena shook her head.
+
+"Not yet," Elena replied. "The tide is wrong, and you know it."
+
+He did know it. He had known it since the morning, when the gulls had gone quiet and the water began to move the wrong way against the harbour wall.
+
+Chapter Two
+
+By evening the wind had changed. Elena climbed the stair to the lantern room and lit the wick with hands that did not shake, and the light swung out across the water.`;
+
+/**
+ * Does preparation actually continue when the app is not in front of you?
+ *
+ * This is the whole promise of "start it and go and eat", and it is invisible
+ * from a foreground test: a hidden page has its timers throttled and can be
+ * suspended outright unless something holds an audio session open. Hiding the
+ * page behind another tab is as close to switching apps as a desktop browser
+ * gets, and it exercises the same throttling path.
+ */
+async function checkBackgroundPrepare(page, ctx) {
+  await page.click('nav.nav >> text=Library');
+  await page.click('text=Add something to read');
+  await page.waitForSelector('.chip-row');
+  await page.click('text=Paste text');
+  await page.fill('#ptitle', 'Background Test');
+  await page.fill('#ptext', SAMPLE);
+  await page.click('text=Prepare for listening');
+  await page.waitForSelector('.reader', { timeout: 20000 });
+
+  await page.click('text=Prepare audio');
+  await page.waitForSelector('.sheet');
+  await page.click('.sheet >> text=Whole document');
+  await page.click('text=Prepare whole document');
+
+  const readProgress = async () =>
+    await page.evaluate(() => {
+      const match = /(\d+)\s*\/\s*(\d+)\s*\(\d+%\)/.exec(document.body.innerText);
+      return match ? { done: Number(match[1]), total: Number(match[2]) } : null;
+    });
+
+  // Wait until it has actually started, so we measure progress and not startup.
+  const startDeadline = Date.now() + 120000;
+  let started = null;
+  while (Date.now() < startDeadline && !started) {
+    started = await readProgress();
+    if (!started) await page.waitForTimeout(1000);
+  }
+  if (!started) return { ok: false, why: 'preparation never reported progress' };
+
+  // Now hide it behind another tab and leave it alone.
+  const other = await ctx.newPage();
+  await other.goto('about:blank');
+  await other.bringToFront();
+
+  const hiddenAt = await readProgress();
+  const hidden = await page.evaluate(() => document.visibilityState);
+  await other.waitForTimeout(25000);
+  const afterHidden = await readProgress();
+  await other.close();
+  await page.bringToFront();
+
+  return {
+    ok: true,
+    wasHidden: hidden === 'hidden',
+    advanced: (afterHidden?.done ?? 0) > (hiddenAt?.done ?? 0),
+    from: hiddenAt,
+    to: afterHidden,
+  };
+}
+
+async function runPass({ isolate, label, background = false }) {
   const ctx = await browser.newContext({ viewport: { width: 400, height: 860 } });
   const page = await ctx.newPage();
 
@@ -137,12 +211,18 @@ async function runPass({ isolate, label }) {
   const threads = Number(/CPU threads:\s*(\d+)/.exec(threadLine)?.[1] ?? 0);
   const cores = await page.evaluate(() => navigator.hardwareConcurrency ?? 0);
 
+  const backgroundResult = background ? await checkBackgroundPrepare(page, ctx) : null;
+
   await ctx.close();
-  return { ok: true, isolated, rtf, threads, cores, errors, threadLine };
+  return { ok: true, isolated, rtf, threads, cores, errors, threadLine, backgroundResult };
 }
 
 // --- the configuration real users get ---
-const fast = await runPass({ isolate: true, label: 'isolated: the default a reader gets' });
+const fast = await runPass({
+  isolate: true,
+  label: 'isolated: the default a reader gets',
+  background: true,
+});
 check('the model downloads and initialises inside the browser', fast.ok, fast.why ?? '');
 if (!fast.ok) {
   await browser.close();
@@ -164,6 +244,22 @@ check(
 );
 check('no console errors during the run', (fast.errors ?? []).length === 0,
   (fast.errors ?? []).slice(0, 2).join(' | '));
+
+// --- preparing a book while the app is not in front ---
+const bg = fast.backgroundResult;
+check('background preparation started', bg?.ok === true, bg?.why ?? '');
+if (bg?.ok) {
+  check('the page really was hidden', bg.wasHidden, 'the tab never lost focus, so this proves nothing');
+  console.log(
+    `background progress: ${bg.from?.done ?? '?'}/${bg.from?.total ?? '?'} -> ` +
+      `${bg.to?.done ?? '?'}/${bg.to?.total ?? '?'} while hidden`
+  );
+  check(
+    'and preparation kept going while it was hidden',
+    bg.advanced,
+    'no sections completed in 25 seconds behind another tab',
+  );
+}
 
 // --- the same machine, single-threaded, for comparison ---
 const slow = await runPass({ isolate: false, label: 'un-isolated: one thread, for comparison' });
