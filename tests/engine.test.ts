@@ -412,6 +412,66 @@ console.log('\n--- continuous playback, no stalls ---');
     `index=${slow.snap.chunkIndex}`);
 }
 
+console.log('\n--- banking ahead while listening ---');
+{
+  // The live buffer is sized for ordinary variation. It cannot absorb a phone
+  // that throttles when it gets warm - so the background loop keeps banking
+  // well past the live target while the reader listens.
+  audioStore.clear();
+  setDelayMs(5);
+  const { engine } = await boot();
+  await engine.play();
+
+  // Let it work: play a couple of chunks so the live buffer is satisfied and
+  // the background loop takes over.
+  const el = currentEl();
+  for (let i = 0; i < 2; i++) {
+    await sleep(150);
+    el.emit('ended');
+  }
+  await sleep(700);
+
+  const snap = engine.snapshot();
+  check(
+    'it banks far beyond the live buffer target',
+    snap.preparedAheadSec > snap.bufferTargetSec * 3,
+    `banked=${Math.round(snap.preparedAheadSec)}s target=${Math.round(snap.bufferTargetSec)}s`,
+  );
+  check(
+    'and the banked audio is on disk, not just in memory',
+    audioStore.size > snap.readyCount,
+    `cached=${audioStore.size} inMemory=${snap.readyCount}`,
+  );
+  check(
+    'memory stays bounded while banking',
+    snap.readyCount <= 12,
+    `${snap.readyCount} chunks held in RAM`,
+  );
+
+  // The point of banking: generation can collapse and playback continues.
+  setDelayMs(5000);
+  let stalls = 0;
+  let prev = snap.status;
+  const stop = engine.subscribe((s) => {
+    if (s.status === 'buffering' && prev !== 'buffering') stalls++;
+    prev = s.status;
+  });
+  for (let i = 0; i < 4; i++) {
+    await sleep(60);
+    el.emit('ended');
+    await sleep(20);
+  }
+  stop();
+  check(
+    'playback survives generation collapsing, on banked audio alone',
+    stalls === 0,
+    `${stalls} interruptions after generation slowed to a crawl`,
+  );
+
+  setDelayMs(1);
+  engine.destroy();
+}
+
 console.log('\n--- a stall resumes by itself ---');
 {
   audioStore.clear();

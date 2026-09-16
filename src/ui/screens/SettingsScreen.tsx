@@ -15,7 +15,7 @@ function formatBytes(bytes: number): string {
 }
 
 export function SettingsScreen(): React.JSX.Element {
-  const { settings, updateSettings, engineStatus, open, showToast, library } = useApp();
+  const { settings, updateSettings, engineStatus, open, player, showToast, library } = useApp();
   const [cache, setCache] = useState<{ count: number; bytes: number } | null>(null);
   const [quota, setQuota] = useState<{ usage: number; quota: number } | null>(null);
   const [perDoc, setPerDoc] = useState<Map<string, { count: number; bytes: number }>>(new Map());
@@ -364,6 +364,12 @@ export function SettingsScreen(): React.JSX.Element {
                 <div>
                   Real-time factor:{' '}
                   {engineStatus.rtf ? `${engineStatus.rtf.toFixed(2)}x` : 'not measured'}
+                </div>
+                <div>
+                  Banked ahead:{' '}
+                  {player.preparedAheadSec > 0
+                    ? `${Math.round(player.preparedAheadSec / 60)} min of narration cached`
+                    : 'nothing yet'}
                 </div>
                 <div>Open document: {open?.meta.title ?? 'none'}</div>
                 <div>Chunks: {open?.chunks.length ?? 0}</div>

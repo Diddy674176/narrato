@@ -70,6 +70,8 @@ export interface PlayerSnapshot {
   totalSec: number;
   bufferedSec: number;
   bufferTargetSec: number;
+  /** Narration seconds banked on disk ahead of the playhead. */
+  preparedAheadSec: number;
   generatingIndex: number | null;
   readyCount: number;
   error: string | null;
@@ -104,6 +106,22 @@ const MEM_BEHIND = 1;
 
 /** Stop generating once this multiple of the target is banked. */
 const OVERSHOOT = 1.6;
+
+/**
+ * How far ahead the background loop banks audio while you listen, in seconds
+ * of narration.
+ *
+ * The live buffer above is sized to survive normal variation; it is not
+ * enough to survive a phone that heats up, or another app taking the CPU for a
+ * minute. Ten minutes is, and it costs nothing extra overall: every chunk is
+ * generated exactly once and cached either way, so this only moves the work
+ * earlier. The bound is what limits the waste if a book is abandoned after two
+ * pages.
+ */
+const AUTO_PREPARE_AHEAD_SEC = 600;
+
+/** Below this, with no charger, banking ahead is not worth the battery. */
+const LOW_BATTERY = 0.2;
 
 
 /**
@@ -170,6 +188,11 @@ export class AudiobookEngine {
   private unlocked = false;
   /** Set when the browser refused to store generated audio. */
   private storageFull = false;
+
+  /** Background banking state; see autoPrepare(). */
+  private autoPrepareRunning = false;
+  private autoPrepareStop = false;
+  private preparedAheadSec = 0;
 
   private chunkIndex = 0;
   private charOffset = 0;
@@ -256,6 +279,7 @@ export class AudiobookEngine {
       totalSec: this.totalSec(),
       bufferedSec: this.bufferedSec(),
       bufferTargetSec: this.bufferTarget(),
+      preparedAheadSec: this.preparedAheadSec,
       generatingIndex: this.inflight,
       readyCount: this.ready.size,
       error: this.error,
@@ -342,6 +366,9 @@ export class AudiobookEngine {
     startChunk: number;
     startOffset: number;
   }): Promise<void> {
+    // A different book invalidates anything the background loop was banking.
+    this.autoPrepareStop = true;
+    this.preparedAheadSec = 0;
     this.stopInternal();
     this.flushMemory();
 
@@ -395,6 +422,8 @@ export class AudiobookEngine {
     if (!this.doc || this.chunks.length === 0) return;
     this.wantPlaying = true;
     this.error = null;
+    // Bank ahead in the background for the rest of this listening session.
+    void this.autoPrepare();
 
     if (this.mode === 'device') {
       this.status = 'playing';
@@ -1219,6 +1248,97 @@ export class AudiobookEngine {
   }
 
   /* ---------------------------------------------------------------- *
+   * Background banking
+   * ---------------------------------------------------------------- */
+
+  /** Battery, when the browser will say. Absent on desktop and in Safari. */
+  private async batteryTooLow(): Promise<boolean> {
+    const nav = navigator as Navigator & {
+      getBattery?: () => Promise<{ level: number; charging: boolean }>;
+    };
+    if (!nav.getBattery) return false;
+    try {
+      const battery = await nav.getBattery();
+      return !battery.charging && battery.level < LOW_BATTERY;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Keep generating quietly while the reader listens.
+   *
+   * The live buffer exists to absorb ordinary variation. It cannot absorb a
+   * phone that throttles when it gets warm, or a minute of CPU lost to another
+   * app - and when it empties, playback pauses, which is the one thing this
+   * app must not do. So once the live buffer is satisfied, this walks forward
+   * banking chunks into the cache until there are ten minutes in hand.
+   *
+   * It always yields to playback: the live pump is topped up before every
+   * chunk, so a seek is never queued behind speculative work. It stops on a
+   * low battery, on a full disk, and when the reader stops listening.
+   */
+  private async autoPrepare(): Promise<void> {
+    if (this.autoPrepareRunning || this.mode === 'device' || !this.doc) return;
+    this.autoPrepareRunning = true;
+    this.autoPrepareStop = false;
+
+    try {
+      let cursor = this.chunkIndex;
+      while (!this.destroyed && !this.autoPrepareStop && this.wantPlaying) {
+        if (this.storageFull) break;
+
+        // A seek backwards makes everything ahead of the old position
+        // irrelevant; follow the playhead rather than finishing old work.
+        if (cursor < this.chunkIndex) cursor = this.chunkIndex;
+        if (cursor >= this.chunks.length) break;
+
+        // Live playback first, always. pump() returns immediately when a
+        // generation is already in flight, so this has to wait rather than
+        // spin - a tight retry loop here starves the very work it is waiting
+        // for, and nothing in the app makes progress.
+        if (this.bufferedSec() < this.bufferTarget()) {
+          await this.pump();
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          continue;
+        }
+
+        const banked = this.bankedAheadSec(cursor);
+        this.preparedAheadSec = banked;
+        if (banked >= AUTO_PREPARE_AHEAD_SEC) {
+          // Far enough ahead. Check back when playback has drawn it down.
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+          continue;
+        }
+
+        if (await this.batteryTooLow()) break;
+
+        try {
+          // Cheap when the chunk is already cached; generates when it is not.
+          await this.ensureChunk(cursor);
+        } catch {
+          break;
+        }
+        this.trimMemory();
+        cursor++;
+        this.emit();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    } finally {
+      this.autoPrepareRunning = false;
+    }
+  }
+
+  /** Narration seconds between the playhead and `cursor`, from known durations. */
+  private bankedAheadSec(cursor: number): number {
+    let total = 0;
+    for (let i = this.chunkIndex; i < cursor; i++) {
+      total += this.durations.get(i) ?? this.chunks[i]?.estSeconds ?? 0;
+    }
+    return total;
+  }
+
+  /* ---------------------------------------------------------------- *
    * Bulk preparation
    * ---------------------------------------------------------------- */
 
@@ -1238,6 +1358,10 @@ export class AudiobookEngine {
     if (this.mode === 'device') {
       throw new Error('Device voices are generated as they play and cannot be prepared ahead.');
     }
+
+    // An explicit "prepare this book" outranks the quiet background loop:
+    // two of them competing for one model would just make both slower.
+    this.autoPrepareStop = true;
 
     let from = 0;
     let to = this.chunks.length - 1;
@@ -1278,6 +1402,9 @@ export class AudiobookEngine {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
+    // Hand the work back to the background loop if the reader is still going.
+    if (this.wantPlaying) void this.autoPrepare();
+
     return { done, total, failed };
   }
 
@@ -1308,6 +1435,7 @@ export class AudiobookEngine {
   }
 
   destroy(): void {
+    this.autoPrepareStop = true;
     this.destroyed = true;
     this.stopInternal();
     this.flushMemory();
