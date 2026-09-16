@@ -74,8 +74,12 @@ async function checkBackgroundPrepare(page, ctx) {
 
   await page.click('text=Prepare audio');
   await page.waitForSelector('.sheet');
-  await page.click('.sheet >> text=Whole document');
-  await page.click('text=Prepare whole document');
+  // Target the chip itself. A bare text selector also matches the explanatory
+  // copy in the sheet ("Start a whole document, then lock the phone..."), and
+  // clicking a paragraph silently does nothing - which is exactly how this
+  // failed the first time.
+  await page.locator('.sheet .chip', { hasText: 'Whole document' }).first().click();
+  await page.getByRole('button', { name: 'Prepare whole document' }).click({ timeout: 20000 });
 
   const readProgress = async () =>
     await page.evaluate(() => {
