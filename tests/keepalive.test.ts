@@ -21,6 +21,15 @@ class FakeAudio {
   volume = 1;
   playing = false;
   removedSrc = false;
+  attached = false;
+  style: Record<string, string> = {};
+  attrs: Record<string, string> = {};
+  setAttribute(name: string, value: string): void {
+    this.attrs[name] = value;
+  }
+  remove(): void {
+    this.attached = false;
+  }
   constructor() {
     FakeAudio.last = this;
   }
@@ -40,6 +49,11 @@ class FakeAudio {
 const listeners: Record<string, Array<() => void>> = {};
 (globalThis as Record<string, unknown>).document = {
   visibilityState: 'visible',
+  body: {
+    appendChild: (el: FakeAudio) => {
+      el.attached = true;
+    },
+  },
   addEventListener: (type: string, fn: () => void) => {
     (listeners[type] ??= []).push(fn);
   },
@@ -114,6 +128,11 @@ console.log('--- holding the page open ---');
   check('a silent track is playing, which is what survives backgrounding', audio.playing);
   check('and it loops, so the session never ends on its own', audio.loop);
   check('at zero volume', audio.volume === 0, String(audio.volume));
+  check(
+    'and it lives in the document, where it can be inspected',
+    audio.attached && audio.attrs['data-narrato'] === 'keep-alive',
+    'a detached element is invisible to a person debugging this on a phone',
+  );
   check('the screen wake lock was requested', wakeLockRequests === 1, String(wakeLockRequests));
   check('the browser reports the session as playing', session.playbackState === 'playing');
 
@@ -144,6 +163,7 @@ console.log('--- holding the page open ---');
   await settle();
   check('stopping releases the wake lock', wakeLockReleased);
   check('and the silent track stops', !audio.playing);
+  check('and is taken back out of the document', !audio.attached);
   check('and its blob is revoked, not leaked', revoked.includes('blob:silence'));
   check('and the media session is handed back', session.playbackState === 'none');
   check('with no stale stop handler left behind', session.handlers.get('stop') === null);

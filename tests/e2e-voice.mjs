@@ -111,7 +111,9 @@ async function checkBackgroundPrepare(page, ctx) {
   const session = await page.evaluate(() => ({
     state: navigator.mediaSession?.playbackState ?? 'unsupported',
     title: navigator.mediaSession?.metadata?.title ?? '',
-    playingAudio: [...document.querySelectorAll('audio')].some((a) => !a.paused),
+    playingAudio: [...document.querySelectorAll('audio[data-narrato="keep-alive"]')].some(
+      (a) => !a.paused
+    ),
   }));
 
   // Tell the page it is hidden and put another tab in front. The second part

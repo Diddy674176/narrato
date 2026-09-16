@@ -61,6 +61,13 @@ export function startKeepAlive(title: string, onStop: () => void): KeepAlive {
   // Silent already, but an explicit zero survives a browser that decides to
   // resample or normalise the clip.
   audio.volume = 0;
+  // In the document rather than floating free: an attached element is one a
+  // person can inspect, and one a test can find. A detached `new Audio()` is
+  // invisible to everything except the code holding the reference.
+  audio.setAttribute('data-narrato', 'keep-alive');
+  audio.setAttribute('aria-hidden', 'true');
+  audio.style.display = 'none';
+  document.body.appendChild(audio);
 
   void audio
     .play()
@@ -134,6 +141,7 @@ export function startKeepAlive(title: string, onStop: () => void): KeepAlive {
         audio.pause();
         audio.removeAttribute('src');
         audio.load();
+        audio.remove();
       } catch {
         /* already gone */
       }
