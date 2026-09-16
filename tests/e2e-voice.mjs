@@ -54,13 +54,24 @@ Chapter Two
 By evening the wind had changed. Elena climbed the stair to the lantern room and lit the wick with hands that did not shake, and the light swung out across the water.`;
 
 /**
- * Does preparation actually continue when the app is not in front of you?
+ * Does preparation keep running when the app is not in front of you?
  *
- * This is the whole promise of "start it and go and eat", and it is invisible
- * from a foreground test: a hidden page has its timers throttled and can be
- * suspended outright unless something holds an audio session open. Hiding the
- * page behind another tab is as close to switching apps as a desktop browser
- * gets, and it exercises the same throttling path.
+ * Be precise about what this can and cannot show. A headless browser has no
+ * window manager, so a tab never really goes to the background: bringing
+ * another page to the front leaves `visibilityState` at "visible", and the
+ * throttling a real phone applies never happens here. Asserting "the page was
+ * hidden" in this environment asserts a lie.
+ *
+ * What is testable, and is what the feature actually rests on:
+ *
+ * - the app holds an audio session for the duration, which is the mechanism
+ *   that stops a mobile browser suspending the page at all;
+ * - the loop keeps completing sections when the page is told it is hidden,
+ *   so nothing in our own code pauses on visibilitychange.
+ *
+ * Whether Android then honours the audio session is Android's contract, not
+ * something any browser on a CI runner can answer - that one is verified on a
+ * real phone.
  */
 async function checkBackgroundPrepare(page, ctx) {
   await page.click('nav.nav >> text=Library');
@@ -96,13 +107,27 @@ async function checkBackgroundPrepare(page, ctx) {
   }
   if (!started) return { ok: false, why: 'preparation never reported progress' };
 
-  // Now hide it behind another tab and leave it alone.
+  // The mechanism: an audio session is what keeps a backgrounded page alive.
+  const session = await page.evaluate(() => ({
+    state: navigator.mediaSession?.playbackState ?? 'unsupported',
+    title: navigator.mediaSession?.metadata?.title ?? '',
+    playingAudio: [...document.querySelectorAll('audio')].some((a) => !a.paused),
+  }));
+
+  // Tell the page it is hidden and put another tab in front. The second part
+  // is theatre in headless; the first part exercises our own code.
   const other = await ctx.newPage();
   await other.goto('about:blank');
   await other.bringToFront();
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => 'hidden',
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
 
   const hiddenAt = await readProgress();
-  const hidden = await page.evaluate(() => document.visibilityState);
   await other.waitForTimeout(25000);
   const afterHidden = await readProgress();
   await other.close();
@@ -110,7 +135,7 @@ async function checkBackgroundPrepare(page, ctx) {
 
   return {
     ok: true,
-    wasHidden: hidden === 'hidden',
+    session,
     advanced: (afterHidden?.done ?? 0) > (hiddenAt?.done ?? 0),
     from: hiddenAt,
     to: afterHidden,
@@ -253,15 +278,24 @@ check('no console errors during the run', (fast.errors ?? []).length === 0,
 const bg = fast.backgroundResult;
 check('background preparation started', bg?.ok === true, bg?.why ?? '');
 if (bg?.ok) {
-  check('the page really was hidden', bg.wasHidden, 'the tab never lost focus, so this proves nothing');
-  console.log(
-    `background progress: ${bg.from?.done ?? '?'}/${bg.from?.total ?? '?'} -> ` +
-      `${bg.to?.done ?? '?'}/${bg.to?.total ?? '?'} while hidden`
+  check(
+    'an audio session is held while preparing, which is what survives backgrounding',
+    bg.session.state === 'playing' && bg.session.playingAudio,
+    JSON.stringify(bg.session),
   );
   check(
-    'and preparation kept going while it was hidden',
+    'and the notification says what it is doing',
+    /preparing/i.test(bg.session.title),
+    bg.session.title || '(no metadata)',
+  );
+  console.log(
+    `background progress: ${bg.from?.done ?? '?'}/${bg.from?.total ?? '?'} -> ` +
+      `${bg.to?.done ?? '?'}/${bg.to?.total ?? '?'} after the page was told it is hidden`
+  );
+  check(
+    'preparation keeps completing sections once the page reports itself hidden',
     bg.advanced,
-    'no sections completed in 25 seconds behind another tab',
+    'nothing completed in 25 seconds',
   );
 }
 
