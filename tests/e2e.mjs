@@ -186,6 +186,11 @@ check(
   prepareText.includes('This chapter') && prepareText.includes('Whole document'),
   prepareText.slice(0, 80),
 );
+check(
+  'and says up front that preparing can be left running',
+  /lock the phone|something else/i.test(prepareText),
+  'a reader who does not know they can walk away will sit and watch a progress bar',
+);
 
 // The cached count is read from IndexedDB, so wait for it rather than racing it.
 const cachedLine = await page

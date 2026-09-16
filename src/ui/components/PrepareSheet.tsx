@@ -20,7 +20,7 @@ function formatBytes(bytes: number): string {
  * buffering stall. Playback keeps priority throughout.
  */
 export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.Element {
-  const { open, settings, showToast, player } = useApp();
+  const { open, settings, showToast, player, engineStatus } = useApp();
   const [scope, setScope] = useState<'chapter' | 'book'>('chapter');
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -28,8 +28,10 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
   const [error, setError] = useState<string | null>(null);
   const [space, setSpace] = useState<{ usage: number; quota: number } | null>(null);
   const [background, setBackground] = useState(false);
+  const [eta, setEta] = useState<number | null>(null);
   const cancelled = useRef(false);
   const keepAlive = useRef<KeepAlive | null>(null);
+  const startedAt = useRef(0);
 
   useEffect(() => {
     void storageEstimate().then(setSpace);
@@ -61,6 +63,9 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
     cancelled.current = false;
     setProgress({ done: 0, total: 0 });
 
+    startedAt.current = Date.now();
+    setEta(null);
+
     // Must be taken inside the tap: playing even a silent track is subject to
     // autoplay policy, and after the first await the gesture is gone. Skipped
     // while something is already playing, because that audio is already
@@ -77,9 +82,23 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
         scope,
         (done, total) => {
           setProgress({ done, total });
+
+          // Measured, not predicted: generation speed depends on the phone,
+          // what else it is doing, and how warm it is, so the only honest
+          // estimate is the rate this run is actually achieving.
+          let remainingSec: number | null = null;
+          if (done >= 2 && total > done) {
+            const perSection = (Date.now() - startedAt.current) / done;
+            remainingSec = (perSection * (total - done)) / 1000;
+            setEta(remainingSec);
+          }
+
           if (total > 0) {
+            const pct = Math.round((done / total) * 100);
             keepAlive.current?.update(
-              `Preparing ${Math.round((done / total) * 100)}% - ${total - done} sections left`
+              remainingSec === null
+                ? `Preparing ${pct}% - ${total - done} sections left`
+                : `Preparing ${pct}% - about ${formatDuration(remainingSec)} left`
             );
           }
         },
@@ -104,6 +123,7 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
       setBackground(false);
       setRunning(false);
       setProgress(null);
+      setEta(null);
     }
   };
 
@@ -167,6 +187,15 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
                   ({formatDuration(secondsToMake)} of listening)
                   {freeBytes !== null ? `, and this device has about ${formatBytes(freeBytes)} free` : ''}
                   .
+                  {engineStatus.rtf && engineStatus.rtf > 0 ? (
+                    <>
+                      {' '}
+                      This phone generates about{' '}
+                      <strong>{engineStatus.rtf.toFixed(1)}x faster than real time</strong>, so
+                      expect roughly <strong>{formatDuration(secondsToMake / engineStatus.rtf)}</strong>{' '}
+                      of generating.
+                    </>
+                  ) : null}
                 </>
               ) : null}
             </p>
@@ -197,6 +226,11 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
                 </span>
               </div>
               <ProgressBar value={fraction} />
+              <p className="small" style={{ margin: '8px 0 0' }} data-testid="prepare-eta">
+                {eta === null
+                  ? 'Measuring how fast this phone generates...'
+                  : `About ${formatDuration(eta)} left at this phone's current speed.`}
+              </p>
               <p className="small muted" style={{ margin: '8px 0 0' }}>
                 You can keep listening while this runs. Playback always takes priority.
               </p>
