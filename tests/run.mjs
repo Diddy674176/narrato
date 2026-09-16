@@ -36,6 +36,7 @@ const stubPlugin = {
 const SUITES = [
   { name: 'text', entry: 'text.test.ts', format: 'esm', stubs: false },
   { name: 'reader', entry: 'reader.test.tsx', format: 'cjs', stubs: false },
+  { name: 'select', entry: 'engine-select.test.ts', format: 'esm', stubs: false },
   { name: 'engine', entry: 'engine.test.ts', format: 'esm', stubs: true },
   // Runs against the real IndexedDB code via fake-indexeddb, so no stubs.
   { name: 'storage', entry: 'storage.test.ts', format: 'esm', stubs: false },

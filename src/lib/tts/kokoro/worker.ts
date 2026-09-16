@@ -2,7 +2,7 @@
 import { KokoroTTS } from 'kokoro-js';
 import type { KokoroDevice, KokoroVoiceId } from '../../../types';
 import type { EnginePreference, FromWorker, KokoroDtype, ToWorker } from './protocol';
-import { KOKORO_MODEL_ID } from './protocol';
+import { KOKORO_MODEL_ID, resolveEnginePreference } from './protocol';
 
 /**
  * Kokoro inference worker.
@@ -42,31 +42,13 @@ function looksMobile(): boolean {
   return /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
 }
 
-/**
- * Resolve 'auto' into a concrete device/dtype pair.
- *
- * WebGPU is much faster, but the fp32 weights it works best with are a 326 MB
- * download - unacceptable over mobile data. So phones default to WASM + q8
- * (92 MB) even when WebGPU exists, and desktops take the fast path. The user
- * can override both in Settings.
- */
+/** Ask the runtime what this device can do, then apply the shared policy. */
 function resolvePreference(pref: EnginePreference): { device: KokoroDevice; dtype: KokoroDtype } {
-  let device: KokoroDevice;
-  if (pref.device === 'auto') {
-    device = hasWebGpu() && !looksMobile() ? 'webgpu' : 'wasm';
-  } else {
-    device = pref.device;
-  }
-  if (device === 'webgpu' && !hasWebGpu()) device = 'wasm';
-
-  let dtype: KokoroDtype;
-  if (pref.dtype === 'auto') {
-    dtype = device === 'webgpu' ? 'fp32' : 'q8';
-  } else {
-    dtype = pref.dtype;
-  }
-
-  return { device, dtype };
+  return resolveEnginePreference(pref, {
+    hasWebGpu: hasWebGpu(),
+    isMobile: looksMobile(),
+    cores: self.navigator?.hardwareConcurrency ?? 0,
+  });
 }
 
 async function loadWith(device: KokoroDevice, dtype: KokoroDtype): Promise<KokoroTTS> {
