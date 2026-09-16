@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { engine } from '../../lib/player/engine';
 import { useApp } from '../../state/store';
+import { AUDIO_BYTES_PER_SEC, storageEstimate } from '../../lib/db';
+import { formatDuration } from '../../lib/format';
 import { Banner, ProgressBar, Sheet } from './common';
+
+function formatBytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
+}
 
 /**
  * Bulk audio preparation.
@@ -11,13 +18,18 @@ import { Banner, ProgressBar, Sheet } from './common';
  * buffering stall. Playback keeps priority throughout.
  */
 export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.Element {
-  const { open, settings, showToast } = useApp();
+  const { open, settings, showToast, player } = useApp();
   const [scope, setScope] = useState<'chapter' | 'book'>('chapter');
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [cached, setCached] = useState<{ cached: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [space, setSpace] = useState<{ usage: number; quota: number } | null>(null);
   const cancelled = useRef(false);
+
+  useEffect(() => {
+    void storageEstimate().then(setSpace);
+  }, [running]);
 
   // Show how much of the selected scope is already on disk.
   useEffect(() => {
@@ -66,8 +78,21 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
     }
   };
 
-  const chapterTitle = open?.chapters[0] ? open.chapters.length : 0;
+  const chapterCount = open?.chapters.length ?? 0;
   const fraction = progress && progress.total > 0 ? progress.done / progress.total : 0;
+
+  // Six hours of narration is about a gigabyte, so telling the user the size
+  // before they start is the difference between a working offline copy and a
+  // half-finished one that ran out of room.
+  const remaining = cached ? cached.total - cached.cached : 0;
+  const secondsToMake =
+    open && cached && cached.total > 0
+      ? (open.meta.estSeconds * (scope === 'book' ? 1 : 1 / Math.max(1, chapterCount))) *
+        (remaining / cached.total)
+      : 0;
+  const estimatedBytes = secondsToMake * AUDIO_BYTES_PER_SEC;
+  const freeBytes = space ? Math.max(0, space.quota - space.usage) : null;
+  const willNotFit = freeBytes !== null && estimatedBytes > freeBytes * 0.9;
 
   return (
     <Sheet title="Prepare audio" onClose={onClose}>
@@ -96,7 +121,7 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
               onClick={() => setScope('book')}
               disabled={running}
             >
-              Whole document{chapterTitle > 1 ? ` (${chapterTitle} chapters)` : ''}
+              Whole document{chapterCount > 1 ? ` (${chapterCount} chapters)` : ''}
             </button>
           </div>
 
@@ -105,7 +130,32 @@ export function PrepareSheet({ onClose }: { onClose: () => void }): React.JSX.El
               {cached.cached} of {cached.total} sections already prepared
               {cached.total > 0 ? ` (${Math.round((cached.cached / cached.total) * 100)}%)` : ''}.
               Already-prepared sections are skipped.
+              {estimatedBytes > 0 ? (
+                <>
+                  {' '}
+                  The rest is roughly <strong>{formatBytes(estimatedBytes)}</strong> of audio
+                  ({formatDuration(secondsToMake)} of listening)
+                  {freeBytes !== null ? `, and this device has about ${formatBytes(freeBytes)} free` : ''}
+                  .
+                </>
+              ) : null}
             </p>
+          ) : null}
+
+          {willNotFit ? (
+            <Banner kind="warn">
+              This may not fit in the space your browser allows. Prepare a chapter at a time,
+              or free space by clearing cached audio for books you have finished
+              (Settings &rarr; Storage).
+            </Banner>
+          ) : null}
+
+          {player.storageFull ? (
+            <Banner kind="error">
+              The browser stopped saving generated audio - storage is full. Playback still
+              works, but sections are not being kept for offline use. Clear cached audio for
+              other books in Settings &rarr; Storage, then try again.
+            </Banner>
           ) : null}
 
           {running && progress ? (

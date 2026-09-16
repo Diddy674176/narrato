@@ -6,7 +6,15 @@ import type {
   VoiceEngineId,
   VoicePreset,
 } from '../../types';
-import { audioKey, getAudio, hasAudioKeys, putAudio, enforceCacheBudget } from '../db';
+import {
+  audioKey,
+  cacheBudgetBytes,
+  enforceCacheBudget,
+  getAudio,
+  hasAudioKeys,
+  isQuotaError,
+  putAudio,
+} from '../db';
 import { hashText } from '../hash';
 import { kokoroClient } from '../tts/kokoro/client';
 import { MODEL_VERSION } from '../tts/kokoro/protocol';
@@ -68,6 +76,8 @@ export interface PlayerSnapshot {
   /** Character offset inside the current chunk, for word-level highlighting. */
   charOffset: number;
   sleepTimerEndsAt: number | null;
+  /** True when generated audio can no longer be saved for offline use. */
+  storageFull: boolean;
 }
 
 interface ReadyChunk {
@@ -95,8 +105,6 @@ const MEM_BEHIND = 1;
 /** Stop generating once this multiple of the target is banked. */
 const OVERSHOOT = 1.6;
 
-/** Audio cache budget. Roughly 6-8 hours of speech. */
-const CACHE_BUDGET_BYTES = 700 * 1024 * 1024;
 
 /**
  * A fraction of a second of silence, used to unlock the audio element.
@@ -157,6 +165,8 @@ export class AudiobookEngine {
   private pumpScheduled = false;
   private destroyed = false;
   private unlocked = false;
+  /** Set when the browser refused to store generated audio. */
+  private storageFull = false;
 
   private chunkIndex = 0;
   private charOffset = 0;
@@ -248,6 +258,7 @@ export class AudiobookEngine {
       error: this.error,
       charOffset: this.charOffset,
       sleepTimerEndsAt: this.sleepEndsAt,
+      storageFull: this.storageFull,
     };
   }
 
@@ -912,21 +923,10 @@ export class AudiobookEngine {
       const result = await this.generateWithRetry(chunk.text, preset);
       const entry = this.adopt(index, result.blob, result.durationSec);
 
-      void putAudio({
-        key,
-        docId: this.doc.id,
-        chunkIndex: index,
-        voiceId,
-        textHash: hashText(chunk.text),
-        blob: result.blob,
-        durationSec: result.durationSec,
-        bytes: result.blob.size,
-        createdAt: Date.now(),
-      })
-        .then(() => enforceCacheBudget(CACHE_BUDGET_BYTES, this.doc?.id ?? null))
-        .catch(() => {
-          /* Quota errors must not interrupt listening. */
-        });
+      // Persisting must never interrupt listening, but a failure here means
+      // this chunk will be regenerated later and, worse, that "prepare whole
+      // book" is quietly not producing an offline copy - so it is recorded.
+      void this.persist(key, voiceId, index, chunk.text, result);
 
       this.error = null;
       return entry;
@@ -939,6 +939,41 @@ export class AudiobookEngine {
       this.inflight = null;
       this.emit();
     }
+  }
+
+  /** Write a generated chunk to disk and keep the cache within budget. */
+  private async persist(
+    key: string,
+    voiceId: string,
+    index: number,
+    text: string,
+    result: { blob: Blob; durationSec: number }
+  ): Promise<void> {
+    if (!this.doc) return;
+    try {
+      await putAudio({
+        key,
+        docId: this.doc.id,
+        chunkIndex: index,
+        voiceId,
+        textHash: hashText(text),
+        blob: result.blob,
+        durationSec: result.durationSec,
+        bytes: result.blob.size,
+        createdAt: Date.now(),
+      });
+      this.storageFull = false;
+
+      const budget = await cacheBudgetBytes();
+      const { stillOver } = await enforceCacheBudget(budget, this.doc.id);
+      // One book can legitimately exceed the budget on its own; that is worth
+      // telling the user, because it is the point at which older books start
+      // disappearing.
+      if (stillOver) this.storageFull = true;
+    } catch (err) {
+      if (isQuotaError(err)) this.storageFull = true;
+    }
+    this.emit();
   }
 
   /**

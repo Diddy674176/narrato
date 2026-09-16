@@ -95,6 +95,7 @@ document → chapters → sentence-aligned chunks (~700 chars ≈ 25-45s)
 - **The backend is selectable.** Auto uses WebGPU on desktop and keeps phones on WASM, because the weights WebGPU prefers are a 326 MB download. Settings → Diagnostics exposes the backend (Auto / WebGPU / WASM) and weight precision (50 / 92 / 326 MB), since on a slow phone WebGPU is by far the biggest available lever. The active precision is part of the audio cache key, so q8 and fp32 audio never get mixed inside one book.
 - **It says so when the device is too slow.** Rather than stalling and apologising, Narrato detects sub-real-time generation up front and offers the two things that help: a bigger pre-roll ("Smooth" start) or the device voice. For reference, a 2-core CI runner measures ~0.99x; ordinary phones and laptops are well above that.
 - **Prepare ahead on demand.** "Prepare audio" generates and caches a chapter or the whole document up front, for a flight or a tunnel. It reports progress, can be stopped without losing work, skips anything already cached, and yields to live playback between sections.
+- **Storage is sized to real books, and honest when it runs out.** Narration is ~48 KB/s, so a 65,000-word novel is about **1 GB** of cached audio and a 100,000-word one about 1.5 GB. The cache budget is therefore derived from the quota the browser actually offers (60% of it, floor 512 MB) rather than a flat cap that no single book could fit inside. If the browser refuses a write, or one book outgrows the budget, that is surfaced — playback continues, but you are told that sections are no longer being kept for offline use, instead of being left with a half-prepared book that claimed to be ready.
 - **Everything is cached** in IndexedDB keyed by document, chunk, voice, engine, text hash and model version. Re-listening never regenerates. Changing voice creates a *parallel* cache instead of destroying the old one.
 - **Memory stays bounded.** Only a window around the playhead is held as object URLs; the rest lives in IndexedDB and old URLs are revoked. This is what makes multi-hour books survive on a phone.
 
@@ -234,7 +235,7 @@ Premium audio is cached and buffered through the same pipeline as Kokoro.
 ## Testing
 
 ```bash
-npm test           # 81 assertions: text pipeline, reader highlighting, playback engine
+npm test           # 87 assertions: text pipeline, reader highlighting, playback engine
 npm run test:e2e   # 20 assertions: real browser, full import → listen flow
 npm run verify:voice  # downloads Kokoro and synthesises real speech to a WAV
 npm run check      # lint + typecheck + tests

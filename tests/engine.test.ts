@@ -55,7 +55,12 @@ class FakeAudio {
 import type { Chapter, DocMeta, TextChunk, VoicePreset } from '../src/types';
 import { AudiobookEngine } from '../src/lib/player/engine';
 import { calls, requested, setFailNext, setDelayMs, setRtf } from './stubs/kokoro-client';
-import { store as audioStore, stats as dbStats } from './stubs/db';
+import {
+  store as audioStore,
+  stats as dbStats,
+  setQuotaFull,
+  setOverBudget,
+} from './stubs/db';
 
 let failures = 0;
 const check = (name: string, cond: boolean, extra = ''): void => {
@@ -444,6 +449,57 @@ console.log('\n--- adapts to an underpowered device ---');
   dev.destroy();
 
   setRtf(4);
+}
+
+// ------------------------------------------------------------------
+// A six-hour book is roughly a gigabyte of audio, so running out of room is a
+// realistic outcome - and silently failing to save would make "prepared for
+// offline" a lie.
+console.log('\n--- storage exhaustion is surfaced, not swallowed ---');
+{
+  audioStore.clear();
+  const { engine } = await boot();
+  check('storage is not flagged to begin with', engine.snapshot().storageFull === false);
+
+  setQuotaFull(true);
+  await engine.play();
+  await sleep(700);
+
+  check(
+    'a full disk is reported to the user',
+    engine.snapshot().storageFull === true,
+    `storageFull=${engine.snapshot().storageFull}`,
+  );
+  check(
+    'playback still works when audio cannot be saved',
+    engine.snapshot().status === 'playing',
+    `status=${engine.snapshot().status}`,
+  );
+  check('nothing was written', audioStore.size === 0, `entries=${audioStore.size}`);
+
+  // Recovering space should clear the warning without a reload.
+  setQuotaFull(false);
+  await engine.goToChunk(2);
+  await sleep(600);
+  check('the warning clears once saving succeeds again',
+    engine.snapshot().storageFull === false);
+  engine.destroy();
+}
+
+console.log('\n--- a book too big for the budget is flagged ---');
+{
+  audioStore.clear();
+  setOverBudget(true);
+  const { engine } = await boot();
+  await engine.play();
+  await sleep(700);
+  check(
+    'exceeding the cache budget is reported',
+    engine.snapshot().storageFull === true,
+    'a single book can outgrow the budget; the user needs to know',
+  );
+  setOverBudget(false);
+  engine.destroy();
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);

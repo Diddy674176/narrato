@@ -211,19 +211,46 @@ export async function clearAllAudio(): Promise<void> {
   await db.clear('audio');
 }
 
+/** Bytes of cached audio per second of speech: 24 kHz, 16-bit mono WAV. */
+export const AUDIO_BYTES_PER_SEC = 24_000 * 2;
+
 /**
- * Keep the cache under a budget by evicting the oldest entries first.
+ * How much cached audio we allow.
  *
- * The document currently being listened to is protected, otherwise a long book
- * could evict its own buffer while playing.
+ * A flat cap is the wrong shape here: six hours of narration - an ordinary
+ * novel - is about 1 GB, so any fixed number small enough to feel polite is
+ * also too small to hold one book. Instead we take a share of what the browser
+ * actually offers this origin, which on a phone with free space is plenty.
+ */
+export async function cacheBudgetBytes(): Promise<number> {
+  const MIN = 512 * 1024 * 1024;
+  const MAX = 8 * 1024 * 1024 * 1024;
+  const est = await storageEstimate();
+  if (!est || est.quota <= 0) return MIN;
+  return Math.max(MIN, Math.min(MAX, Math.floor(est.quota * 0.6)));
+}
+
+export interface EvictionResult {
+  freed: number;
+  /** True when the cache is still over budget after evicting everything we may. */
+  stillOver: boolean;
+}
+
+/**
+ * Keep the cache under budget by evicting the oldest entries first.
+ *
+ * The document being listened to is protected, so a long book is never caught
+ * deleting its own buffer mid-sentence. The consequence is that one very large
+ * book can still exceed the budget on its own - `stillOver` reports that,
+ * rather than letting the caller assume the eviction succeeded.
  */
 export async function enforceCacheBudget(
   budgetBytes: number,
   protectDocId: string | null
-): Promise<number> {
+): Promise<EvictionResult> {
   const db = await getDb();
   const { bytes } = await audioStats();
-  if (bytes <= budgetBytes) return 0;
+  if (bytes <= budgetBytes) return { freed: 0, stillOver: false };
 
   let toFree = bytes - budgetBytes;
   let freed = 0;
@@ -239,7 +266,17 @@ export async function enforceCacheBudget(
     cursor = await cursor.continue();
   }
   await tx.done;
-  return freed;
+  return { freed, stillOver: toFree > 0 };
+}
+
+/** True when a failed write was the browser refusing on storage grounds. */
+export function isQuotaError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return (
+    err.name === 'QuotaExceededError' ||
+    err.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+    /quota|storage|disk/i.test(err.message)
+  );
 }
 
 /* ------------------------------------------------------------------ *
