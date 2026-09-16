@@ -57,6 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   deviceVoiceURI: null,
   kokoroDevice: 'auto',
   kokoroDtype: 'auto',
+  cacheBudgetGb: 10,
 };
 
 export interface OpenDoc {
@@ -76,6 +77,7 @@ interface AppValue {
   refreshLibrary: () => Promise<void>;
   removeDoc: (id: string) => Promise<void>;
   toggleFavorite: (id: string) => Promise<void>;
+  toggleKeepOffline: (id: string) => Promise<void>;
 
   open: OpenDoc | null;
   openDoc: (id: string) => Promise<void>;
@@ -210,6 +212,12 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     return chosen;
   }, [settings.presetId, settings.engine]);
 
+  // Books the user pinned for offline listening, so eviction can skip them.
+  const keptOffline = useMemo(
+    () => new Set(library.filter((d) => d.keepOffline).map((d) => d.id)),
+    [library]
+  );
+
   const characterPresets = useMemo(() => {
     const map = new Map<string, VoicePreset>();
     for (const c of characters) {
@@ -229,6 +237,8 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
       skipSeconds: settings.skipSeconds,
       deviceVoiceURI: settings.deviceVoiceURI,
       characterPresets,
+      cacheBudgetGb: settings.cacheBudgetGb,
+      keepOffline: keptOffline,
     });
   }, [
     preset,
@@ -239,7 +249,9 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     settings.skipSeconds,
     settings.deviceVoiceURI,
     settings.batterySaver,
+    settings.cacheBudgetGb,
     characterPresets,
+    keptOffline,
   ]);
 
   /* ---------------- settings ---------------- */
@@ -349,6 +361,16 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
       });
     },
     [prepareChunks]
+  );
+
+  const toggleKeepOffline = useCallback(
+    async (id: string) => {
+      const meta = await db.getDoc(id);
+      if (!meta) return;
+      await db.putDoc({ ...meta, keepOffline: !meta.keepOffline });
+      await refreshLibrary();
+    },
+    [refreshLibrary]
   );
 
   const openDoc = useCallback(
@@ -517,6 +539,7 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     refreshLibrary,
     removeDoc,
     toggleFavorite,
+    toggleKeepOffline,
     open,
     openDoc,
     closeDoc,

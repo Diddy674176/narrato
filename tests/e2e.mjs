@@ -181,6 +181,40 @@ check('prepare sheet reports how much is already cached', cachedLine,
 await page.screenshot({ path: `${SHOT}/08-prepare.png` });
 await page.click('.sheet .icon-btn >> nth=0');
 
+// 12. Offline-library controls: budget ceiling and per-book keep-offline
+await page.click('nav.nav >> text=Settings');
+await page.waitForSelector('text=Storage');
+const budgetSlider = await page.$('#budget');
+check('storage budget control exists', budgetSlider !== null);
+if (budgetSlider) {
+  const max = await budgetSlider.getAttribute('max');
+  check('budget can be raised to 10 GB', max === '10', `max=${max}`);
+  await page.fill('#budget', '10');
+  await page.waitForTimeout(300);
+  const label = await page.textContent('label[for="budget"]');
+  check('the chosen budget is shown', /10 GB/.test(label), label);
+  const settingsText = await page.textContent('.container');
+  check(
+    'the budget is explained in books, not just bytes',
+    /full-length books/.test(settingsText),
+  );
+}
+
+await page.click('nav.nav >> text=Library');
+await page.waitForSelector('.doc-card');
+await page.click('.icon-btn[aria-label^="Options for"]');
+await page.waitForSelector('.sheet');
+const menuText = await page.textContent('.sheet');
+check('a book can be kept offline', /Keep offline/.test(menuText), menuText.slice(0, 120));
+await page.click('text=Keep offline');
+await page.waitForTimeout(400);
+check(
+  'kept books are marked in the library',
+  (await page.textContent('.doc-card')).includes('\u2B07'),
+  await page.textContent('.doc-card'),
+);
+await page.screenshot({ path: `${SHOT}/13-offline-library.png` });
+
 const realErrors = errors.filter(
   (e) => !/favicon|manifest|Download the React DevTools/i.test(e),
 );

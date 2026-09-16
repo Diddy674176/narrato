@@ -15,7 +15,7 @@ export function LibraryScreen({
   onOpen: (id: string) => void;
   onAdd: () => void;
 }): React.JSX.Element {
-  const { library, refreshLibrary, removeDoc, toggleFavorite } = useApp();
+  const { library, refreshLibrary, removeDoc, toggleFavorite, toggleKeepOffline } = useApp();
   const [positions, setPositions] = useState<Record<string, ReadingPosition>>({});
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
@@ -75,6 +75,7 @@ export function LibraryScreen({
           <div className="doc-info">
             <div className="doc-title">
               {doc.favorite ? '★ ' : ''}
+              {doc.keepOffline ? '⬇ ' : ''}
               {doc.title}
             </div>
             <div className="doc-meta">
@@ -219,6 +220,17 @@ export function LibraryScreen({
               }}
             >
               {menuFor.favorite ? 'Remove from favourites' : 'Add to favourites'}
+            </button>
+            <button
+              className="btn btn-block"
+              onClick={() => {
+                void toggleKeepOffline(menuFor.id);
+                setMenuFor(null);
+              }}
+            >
+              {menuFor.keepOffline
+                ? 'Stop keeping offline'
+                : 'Keep offline (never auto-delete)'}
             </button>
             <button
               className="btn btn-block"

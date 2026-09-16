@@ -14,20 +14,25 @@ function formatBytes(bytes: number): string {
 }
 
 export function SettingsScreen(): React.JSX.Element {
-  const { settings, updateSettings, engineStatus, open, showToast } = useApp();
+  const { settings, updateSettings, engineStatus, open, showToast, library } = useApp();
   const [cache, setCache] = useState<{ count: number; bytes: number } | null>(null);
   const [quota, setQuota] = useState<{ usage: number; quota: number } | null>(null);
+  const [perDoc, setPerDoc] = useState<Map<string, { count: number; bytes: number }>>(new Map());
+  const [budget, setBudget] = useState<db.BudgetInfo | null>(null);
   const [showPronunciation, setShowPronunciation] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
 
   const refreshStorage = async () => {
     setCache(await db.audioStats());
     setQuota(await db.storageEstimate());
+    setPerDoc(await db.audioStatsByDoc());
+    setBudget(await db.effectiveCacheBudget(settings.cacheBudgetGb));
   };
 
   useEffect(() => {
     void refreshStorage();
-  }, []);
+    // Re-measure when the budget preference changes so the warning stays true.
+  }, [settings.cacheBudgetGb]);
 
   return (
     <div className="screen">
@@ -214,7 +219,78 @@ export function SettingsScreen(): React.JSX.Element {
                 <span />
               </SettingRow>
             ) : null}
+
+            <div className="field" style={{ marginTop: 12, marginBottom: 0 }}>
+              <label htmlFor="budget">
+                Keep up to {settings.cacheBudgetGb} GB of audio
+              </label>
+              <input
+                id="budget"
+                type="range"
+                min={1}
+                max={db.MAX_CACHE_BUDGET_GB}
+                step={1}
+                value={settings.cacheBudgetGb}
+                onChange={(e) => updateSettings({ cacheBudgetGb: Number(e.target.value) })}
+              />
+              <div className="small muted">
+                Roughly {Math.round((settings.cacheBudgetGb * 1024 * 1024 * 1024) /
+                  db.AUDIO_BYTES_PER_SEC / 3600)}{' '}
+                hours of narration - about{' '}
+                {Math.max(1, Math.round((settings.cacheBudgetGb * 1024 * 1024 * 1024) /
+                  db.AUDIO_BYTES_PER_SEC / 3600 / 6))}{' '}
+                full-length books. Older audio is deleted first once this is reached.
+              </div>
+            </div>
           </div>
+
+          {budget?.quotaLimited ? (
+            <Banner kind="warn">
+              This browser will only grant about {formatBytes(budget.budget)} to Narrato, so the{' '}
+              {settings.cacheBudgetGb} GB setting cannot be reached. Freeing space on the device
+              usually raises the limit. Installing Narrato to your home screen also helps, as
+              installed apps are given a larger, more durable allowance.
+            </Banner>
+          ) : null}
+
+          {perDoc.size > 0 ? (
+            <div className="card" style={{ marginTop: 10 }}>
+              <div className="small muted" style={{ marginBottom: 8 }}>
+                Audio stored per book. Books marked <strong>Keep offline</strong> are never
+                deleted automatically - set that from the &#8942; menu in your library.
+              </div>
+              <div className="stack">
+                {[...perDoc.entries()]
+                  .map(([id, stat]) => ({
+                    id,
+                    stat,
+                    meta: library.find((d) => d.id === id) ?? null,
+                  }))
+                  .sort((a, b) => b.stat.bytes - a.stat.bytes)
+                  .map(({ id, stat, meta }) => (
+                    <div key={id} className="spread">
+                      <div style={{ minWidth: 0 }}>
+                        <div className="truncate" style={{ fontSize: 13.5 }}>
+                          {meta?.keepOffline ? '\u2B07 ' : ''}
+                          {meta?.title ?? 'Deleted document'}
+                        </div>
+                        <div className="small muted">
+                          {formatBytes(stat.bytes)} &middot; {stat.count} sections
+                        </div>
+                      </div>
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => {
+                          void db.clearAudioForDoc(id).then(refreshStorage);
+                        }}
+                      >
+                        Delete audio
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          ) : null}
           <p className="small muted" style={{ marginTop: 8 }}>
             Everything - your documents and the audio generated from them - is stored only on
             this device. Deleting a document deletes its audio too.

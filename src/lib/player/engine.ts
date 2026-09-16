@@ -156,6 +156,9 @@ export class AudiobookEngine {
   private startupMode: StartupMode = 'balanced';
   private skipSeconds = 15;
   private deviceVoiceURI: string | null = null;
+  private cacheBudgetGb = 10;
+  /** Documents the user asked to keep offline; never evicted. */
+  private keepOffline: ReadonlySet<string> = new Set();
   /** Per-character voice overrides, by speaker name. */
   private characterPresets = new Map<string, VoicePreset>();
 
@@ -275,6 +278,8 @@ export class AudiobookEngine {
     skipSeconds: number;
     deviceVoiceURI: string | null;
     characterPresets?: Map<string, VoicePreset>;
+    cacheBudgetGb?: number;
+    keepOffline?: ReadonlySet<string>;
   }): void {
     const voiceChanged =
       this.preset?.id !== opts.preset.id || this.mode !== opts.mode;
@@ -285,6 +290,8 @@ export class AudiobookEngine {
     this.skipSeconds = opts.skipSeconds;
     this.deviceVoiceURI = opts.deviceVoiceURI;
     if (opts.characterPresets) this.characterPresets = opts.characterPresets;
+    if (opts.cacheBudgetGb !== undefined) this.cacheBudgetGb = opts.cacheBudgetGb;
+    if (opts.keepOffline) this.keepOffline = opts.keepOffline;
 
     this.setRate(opts.rate);
     this.setVolume(opts.volume);
@@ -964,8 +971,8 @@ export class AudiobookEngine {
       });
       this.storageFull = false;
 
-      const budget = await cacheBudgetBytes();
-      const { stillOver } = await enforceCacheBudget(budget, this.doc.id);
+      const budget = await cacheBudgetBytes(this.cacheBudgetGb);
+      const { stillOver } = await enforceCacheBudget(budget, this.doc.id, this.keepOffline);
       // One book can legitimately exceed the budget on its own; that is worth
       // telling the user, because it is the point at which older books start
       // disappearing.

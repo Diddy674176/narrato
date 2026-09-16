@@ -72,6 +72,11 @@ export interface DocMeta {
   /** Rough narration length at 1x, in seconds. */
   estSeconds: number;
   favorite: boolean;
+  /**
+   * Protect this book's cached audio from eviction, so a newly prepared book
+   * cannot quietly consume one you saved for a trip.
+   */
+  keepOffline: boolean;
   finished: boolean;
   coverEmoji: string;
   description: string | null;
@@ -198,6 +203,8 @@ export interface Settings {
   kokoroDevice: 'auto' | KokoroDevice;
   /** Kokoro weight precision. Bigger is better quality but a larger download. */
   kokoroDtype: 'auto' | 'q8' | 'q4f16' | 'fp32';
+  /** Ceiling on cached audio, in GB. The browser's own quota still applies. */
+  cacheBudgetGb: number;
 }
 
 /* ------------------------------------------------------------------ *

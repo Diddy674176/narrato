@@ -33,12 +33,41 @@ export async function putAudio(entry: CachedAudio): Promise<void> {
 
 export const AUDIO_BYTES_PER_SEC = 24_000 * 2;
 
-export async function cacheBudgetBytes(): Promise<number> {
-  return 512 * 1024 * 1024;
+export async function cacheBudgetBytes(preferredGb: number): Promise<number> {
+  return Math.min(preferredGb, MAX_CACHE_BUDGET_GB) * 1024 * 1024 * 1024;
 }
 
-export async function enforceCacheBudget(): Promise<{ freed: number; stillOver: boolean }> {
+export const MAX_CACHE_BUDGET_GB = 10;
+
+/** Records what the engine asked to protect, so tests can assert on it. */
+export const lastEviction = {
+  budget: 0,
+  protectDocId: null as string | null,
+  keepDocIds: new Set<string>(),
+  calls: 0,
+};
+
+export async function enforceCacheBudget(
+  budgetBytes: number,
+  protectDocId: string | null,
+  keepDocIds: ReadonlySet<string> = new Set()
+): Promise<{ freed: number; stillOver: boolean }> {
+  lastEviction.budget = budgetBytes;
+  lastEviction.protectDocId = protectDocId;
+  lastEviction.keepDocIds = new Set(keepDocIds);
+  lastEviction.calls++;
   return { freed: 0, stillOver: overBudget };
+}
+
+export async function audioStatsByDoc(): Promise<Map<string, { count: number; bytes: number }>> {
+  const out = new Map<string, { count: number; bytes: number }>();
+  for (const v of store.values()) {
+    const prev = out.get(v.docId) ?? { count: 0, bytes: 0 };
+    prev.count += 1;
+    prev.bytes += v.bytes;
+    out.set(v.docId, prev);
+  }
+  return out;
 }
 
 export function isQuotaError(err: unknown): boolean {

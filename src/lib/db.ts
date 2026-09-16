@@ -222,12 +222,65 @@ export const AUDIO_BYTES_PER_SEC = 24_000 * 2;
  * also too small to hold one book. Instead we take a share of what the browser
  * actually offers this origin, which on a phone with free space is plenty.
  */
-export async function cacheBudgetBytes(): Promise<number> {
-  const MIN = 512 * 1024 * 1024;
-  const MAX = 8 * 1024 * 1024 * 1024;
+export const MAX_CACHE_BUDGET_GB = 10;
+
+/**
+ * How much cached audio we allow, in bytes.
+ *
+ * Two ceilings apply and the smaller one wins. The user's own preference is
+ * the one they control; the browser's quota is the one that actually refuses
+ * writes. Asking for 10 GB on a device that will only grant 2 GB does not
+ * produce 10 GB, so we never pretend otherwise - `effectiveCacheBudget`
+ * reports both numbers so the UI can say which is binding.
+ */
+export async function cacheBudgetBytes(preferredGb: number): Promise<number> {
+  return (await effectiveCacheBudget(preferredGb)).budget;
+}
+
+export interface BudgetInfo {
+  /** What we will actually enforce. */
+  budget: number;
+  /** What the user asked for. */
+  requested: number;
+  /** What the browser says this origin may use in total, if known. */
+  quota: number | null;
+  /** True when the browser's quota, not the preference, is the real limit. */
+  quotaLimited: boolean;
+}
+
+export async function effectiveCacheBudget(preferredGb: number): Promise<BudgetInfo> {
+  const MIN = 256 * 1024 * 1024;
+  const requested = Math.max(
+    MIN,
+    Math.min(MAX_CACHE_BUDGET_GB, preferredGb) * 1024 * 1024 * 1024
+  );
   const est = await storageEstimate();
-  if (!est || est.quota <= 0) return MIN;
-  return Math.max(MIN, Math.min(MAX, Math.floor(est.quota * 0.6)));
+  if (!est || est.quota <= 0) {
+    return { budget: requested, requested, quota: null, quotaLimited: false };
+  }
+  // Leave headroom: the quota covers documents and the voice model too.
+  const allowed = Math.max(MIN, Math.floor(est.quota * 0.85));
+  return {
+    budget: Math.min(requested, allowed),
+    requested,
+    quota: est.quota,
+    quotaLimited: allowed < requested,
+  };
+}
+
+/** Bytes of cached audio per document, for an offline-library view. */
+export async function audioStatsByDoc(): Promise<Map<string, { count: number; bytes: number }>> {
+  const db = await getDb();
+  const out = new Map<string, { count: number; bytes: number }>();
+  let cursor = await db.transaction('audio').store.openCursor();
+  while (cursor) {
+    const prev = out.get(cursor.value.docId) ?? { count: 0, bytes: 0 };
+    prev.count += 1;
+    prev.bytes += cursor.value.bytes;
+    out.set(cursor.value.docId, prev);
+    cursor = await cursor.continue();
+  }
+  return out;
 }
 
 export interface EvictionResult {
@@ -239,14 +292,19 @@ export interface EvictionResult {
 /**
  * Keep the cache under budget by evicting the oldest entries first.
  *
- * The document being listened to is protected, so a long book is never caught
- * deleting its own buffer mid-sentence. The consequence is that one very large
- * book can still exceed the budget on its own - `stillOver` reports that,
- * rather than letting the caller assume the eviction succeeded.
+ * Two kinds of document are never evicted: the one being listened to (a long
+ * book must not delete its own buffer mid-sentence) and any the user marked
+ * "keep offline". Without that second rule, preparing a new book for a trip
+ * would silently eat the books already prepared for it - which is the whole
+ * point of preparing them.
+ *
+ * One very large protected book can therefore still exceed the budget on its
+ * own; `stillOver` reports that rather than letting the caller assume success.
  */
 export async function enforceCacheBudget(
   budgetBytes: number,
-  protectDocId: string | null
+  protectDocId: string | null,
+  keepDocIds: ReadonlySet<string> = new Set()
 ): Promise<EvictionResult> {
   const db = await getDb();
   const { bytes } = await audioStats();
@@ -258,9 +316,10 @@ export async function enforceCacheBudget(
   let cursor = await tx.store.index('createdAt').openCursor();
 
   while (cursor && toFree > 0) {
-    if (cursor.value.docId !== protectDocId) {
-      toFree -= cursor.value.bytes;
-      freed += cursor.value.bytes;
+    const { docId, bytes: size } = cursor.value;
+    if (docId !== protectDocId && !keepDocIds.has(docId)) {
+      toFree -= size;
+      freed += size;
       await cursor.delete();
     }
     cursor = await cursor.continue();

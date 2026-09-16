@@ -94,6 +94,7 @@ export function buildDoc(opts: {
     chapterCount: opts.chapters.length,
     estSeconds: estimateSeconds(fullText),
     favorite: false,
+    keepOffline: false,
     finished: false,
     coverEmoji: EMOJI_BY_SOURCE[opts.source],
     description: fullText.slice(0, 220).replace(/\s+/g, ' ').trim(),

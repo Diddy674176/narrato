@@ -60,6 +60,7 @@ import {
   stats as dbStats,
   setQuotaFull,
   setOverBudget,
+  lastEviction,
 } from './stubs/db';
 
 let failures = 0;
@@ -499,6 +500,49 @@ console.log('\n--- a book too big for the budget is flagged ---');
     'a single book can outgrow the budget; the user needs to know',
   );
   setOverBudget(false);
+  engine.destroy();
+}
+
+// ------------------------------------------------------------------
+// Keeping several books offline only works if preparing a new one cannot
+// evict the ones already prepared for a trip.
+console.log('\n--- offline library: budget and pinned books ---');
+{
+  audioStore.clear();
+  lastEviction.calls = 0;
+
+  const engine = new AudiobookEngine();
+  const pinned = new Set(['doc_trip_a', 'doc_trip_b']);
+  engine.configure({
+    preset: PRESET, mode: 'kokoro', rate: 1, volume: 1,
+    startupMode: 'balanced', skipSeconds: 15, deviceVoiceURI: null,
+    cacheBudgetGb: 10, keepOffline: pinned,
+  });
+  const chunks = makeChunks();
+  await engine.load({
+    doc: DOC, chapters: CHAPTERS, chunks,
+    chapterStarts: [0, 12], startChunk: 0, startOffset: 0,
+  });
+
+  await engine.play();
+  await sleep(700);
+
+  check('eviction ran after caching', lastEviction.calls > 0, `calls=${lastEviction.calls}`);
+  check(
+    'the 10 GB preference reaches the eviction policy',
+    lastEviction.budget === 10 * 1024 * 1024 * 1024,
+    `budget=${lastEviction.budget}`,
+  );
+  check(
+    'books marked keep-offline are protected from eviction',
+    lastEviction.keepDocIds.has('doc_trip_a') && lastEviction.keepDocIds.has('doc_trip_b'),
+    `kept=${[...lastEviction.keepDocIds].join(',')}`,
+  );
+  check(
+    'the book being listened to is protected too',
+    lastEviction.protectDocId === DOC.id,
+    `protect=${lastEviction.protectDocId}`,
+  );
   engine.destroy();
 }
 
