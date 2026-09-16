@@ -54,15 +54,27 @@ jobs:
           path: .model-cache
           key: kokoro-82m-v1.0-q8-v2
 
-      - name: Synthesise speech and verify it
+      # q8 is what a modest device gets; fp16 is what a flagship phone on
+      # WebGPU now gets automatically. A precision that is not actually
+      # published would make that choice fall back silently, so both are
+      # loaded and made to speak.
+      - name: Synthesise speech and verify it (q8)
         run: npm run verify:voice
+        env:
+          VOICE_DTYPE: q8
+
+      - name: Verify the fp16 weights a flagship phone uses
+        run: npm run verify:voice
+        env:
+          VOICE_DTYPE: fp16
+          VOICE_OUT: narrato-voice-sample-fp16.wav
 
       - name: Upload audio sample
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: voice-sample
-          path: narrato-voice-sample.wav
+          path: narrato-voice-sample*.wav
           if-no-files-found: warn
 
   # Deploy only from the default branch; pull requests just get the checks above.

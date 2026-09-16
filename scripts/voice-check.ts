@@ -16,6 +16,8 @@ import { cleanText, countWords } from '../src/lib/textProcess';
 import { detectChapters } from '../src/lib/chapters';
 import { planChunks, DEFAULT_CHUNK_OPTIONS } from '../src/lib/chunker';
 import { getPreset } from '../src/lib/tts/voices';
+import { KOKORO_MODEL_ID } from '../src/lib/tts/kokoro/protocol';
+import type { KokoroDtype } from '../src/lib/tts/kokoro/protocol';
 
 // Pin the model cache to a predictable directory so CI can cache it between
 // runs; transformers.js otherwise hides it inside node_modules, which npm ci
@@ -25,6 +27,13 @@ hfEnv.cacheDir = process.env.MODEL_CACHE_DIR ?? '.model-cache';
 const SAMPLE_RATE = 24000;
 const OUT = process.env.VOICE_OUT ?? 'narrato-voice-sample.wav';
 const PRESET_ID = process.env.VOICE_PRESET ?? 'k_audiobook_f';
+/**
+ * Which weights to load. Worth exercising every precision the app can pick
+ * automatically: a dtype that is not actually published in the model repo
+ * would make the app fall back silently, turning a deliberate choice into a
+ * no-op nobody notices.
+ */
+const DTYPE = (process.env.VOICE_DTYPE ?? 'q8') as KokoroDtype;
 
 /**
  * Deliberately awkward source text: a heading, a hyphen split across a line
@@ -112,12 +121,13 @@ async function main(): Promise<void> {
   console.log(`\nVoice: ${preset.label} (${voice}, Kokoro grade ${preset.quality ?? '?'})`);
   console.log(`Chunks: ${chunks.length}, words: ${countWords(cleaned)}\n`);
 
-  console.log('Loading Kokoro-82M (first run downloads ~92 MB)...');
+  console.log(`Loading ${KOKORO_MODEL_ID} (${DTYPE})...`);
   const loadStart = Date.now();
-  const tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
-    dtype: 'q8',
+  const tts = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+    dtype: DTYPE,
     device: 'cpu',
   });
+  check(`the ${DTYPE} weights exist and load`, true);
   console.log(`Model ready in ${((Date.now() - loadStart) / 1000).toFixed(1)}s\n`);
 
   // --- generate every chunk, exactly as the player does ---
