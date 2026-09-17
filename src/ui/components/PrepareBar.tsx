@@ -1,5 +1,15 @@
+import { useEffect, useState } from 'react';
 import { useApp } from '../../state/store';
 import { formatDuration } from '../../lib/format';
+
+/**
+ * How long a section may take before something is clearly wrong.
+ *
+ * A section is a few hundred characters - tens of seconds even on a slow
+ * phone. Minutes of silence means the work is not running: usually because
+ * the operating system suspended the app despite the audio session.
+ */
+const STALLED_MS = 4 * 60 * 1000;
 
 /**
  * App-wide preparation progress.
@@ -12,7 +22,20 @@ import { formatDuration } from '../../lib/format';
  */
 export function PrepareBar(): React.JSX.Element | null {
   const { prepare, stopPrepare } = useApp();
+
+  // Re-render on a timer: "nothing has happened for six minutes" is a
+  // statement about elapsed time, so nothing else would prompt it.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!prepare) return;
+    const id = setInterval(() => tick((n) => n + 1), 30000);
+    return () => clearInterval(id);
+  }, [prepare]);
+
   if (!prepare) return null;
+
+  const stalledFor = Date.now() - prepare.lastAdvanceAt;
+  const stalled = stalledFor > STALLED_MS;
 
   const fraction = prepare.total > 0 ? prepare.done / prepare.total : 0;
   const pct = Math.round(fraction * 100);
@@ -24,6 +47,11 @@ export function PrepareBar(): React.JSX.Element | null {
         <span className="small">
           {prepare.stopping ? (
             <strong>Finishing the current section, then stopping...</strong>
+          ) : stalled ? (
+            <strong data-testid="prepare-stalled">
+              Nothing generated for {formatDuration(stalledFor / 1000)} - your phone probably
+              suspended Narrato. Keep it open, or on screen, to continue.
+            </strong>
           ) : (
             <>
               <strong>Preparing {prepare.title}</strong>

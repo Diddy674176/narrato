@@ -137,6 +137,8 @@ export interface PrepareJob {
    * seconds. Saying so beats a button that appears to have done nothing.
    */
   stopping: boolean;
+  /** When a section last completed. Silence here is the symptom to look for. */
+  lastAdvanceAt: number;
 }
 
 const AppContext = createContext<AppValue | null>(null);
@@ -600,6 +602,7 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
         etaSec: null,
         background: prepareKeepAlive.current?.holding ?? false,
         stopping: false,
+        lastAdvanceAt: Date.now(),
       });
 
       try {
@@ -613,7 +616,9 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
               done >= 2 && total > done
                 ? (((Date.now() - startedAt) / done) * (total - done)) / 1000
                 : null;
-            setPrepare((job) => (job ? { ...job, done, total, etaSec } : job));
+            setPrepare((job) =>
+              job ? { ...job, done, total, etaSec, lastAdvanceAt: Date.now() } : job
+            );
             if (total > 0) {
               const pct = Math.round((done / total) * 100);
               prepareKeepAlive.current?.update(

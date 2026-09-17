@@ -127,7 +127,12 @@ console.log('--- holding the page open ---');
   const audio = FakeAudio.last!;
   check('a silent track is playing, which is what survives backgrounding', audio.playing);
   check('and it loops, so the session never ends on its own', audio.loop);
-  check('at zero volume', audio.volume === 0, String(audio.volume));
+  check(
+    'at full volume, carrying a real signal',
+    audio.volume === 1,
+    'a browser decides a tab is playing audio from the power of its output, so '
+      + 'a track of digital zeros earns none of the background exemptions it is played for',
+  );
   check(
     'and it lives in the document, where it can be inspected',
     audio.attached && audio.attrs['data-narrato'] === 'keep-alive',
@@ -176,6 +181,41 @@ console.log('--- holding the page open ---');
   // Double-stop happens whenever a sheet closes over a finished run.
   alive.stop();
   check('stopping twice is harmless', true);
+}
+
+console.log('\n--- the track has to be audible to the browser, not to a person ---');
+{
+  const { silentWavUrl } = await import('../src/lib/player/silence');
+
+  // Rebuild what the helper produces and look at the samples themselves.
+  const decode = (fn: () => string): number => {
+    let captured: ArrayBuffer | null = null;
+    const realBlob = globalThis.Blob;
+    (globalThis as Record<string, unknown>).Blob = class {
+      constructor(parts: ArrayBuffer[]) {
+        captured = parts[0]!;
+      }
+    };
+    fn();
+    (globalThis as Record<string, unknown>).Blob = realBlob;
+    const view = new DataView(captured!);
+    let peak = 0;
+    for (let i = 44; i + 1 < view.byteLength; i += 2) {
+      peak = Math.max(peak, Math.abs(view.getInt16(i, true)));
+    }
+    return peak / 32767;
+  };
+
+  const unlockPeak = decode(() => silentWavUrl(0.05));
+  check('the unlock clip is true silence', unlockPeak === 0, String(unlockPeak));
+
+  const holdPeak = decode(() => silentWavUrl(1, 0.0005));
+  check('the keep-alive clip is not', holdPeak > 0, String(holdPeak));
+  check(
+    'but is far below anything a phone can reproduce',
+    holdPeak < 0.002,
+    `${(20 * Math.log10(holdPeak)).toFixed(0)} dBFS - a person must never hear this`,
+  );
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);

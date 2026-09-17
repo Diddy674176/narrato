@@ -54,13 +54,16 @@ export function startKeepAlive(title: string, onStop: () => void): KeepAlive {
   let holding = false;
   let wakeLock: WakeLock | null = null;
 
-  const url = silentWavUrl(1);
+  // Not digitally silent, and not at zero volume: a browser works out whether
+  // a tab is playing audio from the power of the stream it outputs, so a track
+  // of zeros buys none of the background exemptions that are the entire point
+  // of playing it. This is a 60 Hz tone at -66 dBFS - a real signal, and one
+  // no phone speaker can reproduce.
+  const url = silentWavUrl(1, 0.0005);
   const audio = new Audio();
   audio.src = url;
   audio.loop = true;
-  // Silent already, but an explicit zero survives a browser that decides to
-  // resample or normalise the clip.
-  audio.volume = 0;
+  audio.volume = 1;
   // In the document rather than floating free: an attached element is one a
   // person can inspect, and one a test can find. A detached `new Audio()` is
   // invisible to everything except the code holding the reference.
