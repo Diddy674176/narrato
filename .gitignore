@@ -4,3 +4,6 @@ dist-ssr
 *.local
 .env
 .DS_Store
+.screenshots
+.model-cache
+narrato-voice-sample.wav

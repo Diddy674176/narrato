@@ -3,6 +3,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main, master]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -23,13 +24,102 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm install
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
+  # Proves the AI voice actually speaks: downloads Kokoro-82M, runs a passage
+  # through the real text pipeline, and checks the audio is continuous speech
+  # at a human pace. The resulting WAV is uploaded so it can be listened to.
+  voice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      # The model is ~92 MB. voice-check pins transformers.js at .model-cache
+      # so this path is stable across runs (node_modules is wiped by npm ci).
+      - name: Cache Kokoro model
+        uses: actions/cache@v4
+        with:
+          path: .model-cache
+          key: kokoro-82m-v1.0-q8-v2
+
+      # q8 is what a modest device gets; fp16 is what a flagship phone on
+      # WebGPU now gets automatically. A precision that is not actually
+      # published would make that choice fall back silently, so both are
+      # loaded and made to speak.
+      - name: Synthesise speech and verify it (q8)
+        run: npm run verify:voice
+        env:
+          VOICE_DTYPE: q8
+
+      - name: Verify the fp16 weights a flagship phone uses
+        run: npm run verify:voice
+        env:
+          VOICE_DTYPE: fp16
+          VOICE_OUT: narrato-voice-sample-fp16.wav
+
+      - name: Upload audio sample
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-sample
+          path: narrato-voice-sample*.wav
+          if-no-files-found: warn
+
+  # Proves the app works in a real browser: that the service worker makes the
+  # page cross-origin isolated (which is what gives the voice model more than
+  # one CPU core), and that the model still downloads and speaks under that
+  # isolation. Node-side voice checks cannot see any of this.
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+
+      # One step, so the preview server is a child of this shell and cannot be
+      # left running - or killed - between steps.
+      - name: UI, isolation, then a real in-browser synthesis
+        run: |
+          npx vite preview --port 4173 &
+          server=$!
+          trap 'kill $server' EXIT
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:4173/narrato/ >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4173/narrato/ >/dev/null || { echo 'preview server did not start'; exit 1; }
+          npm run test:e2e
+          npm run test:e2e:voice
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: .screenshots
+          if-no-files-found: ignore
+
+  # Deploy only from the default branch; pull requests just get the checks above.
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:

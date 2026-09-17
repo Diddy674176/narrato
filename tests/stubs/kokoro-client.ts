@@ -1,0 +1,37 @@
+// Fake Kokoro client: records the order chunks were requested in.
+export const calls: string[] = [];
+export const requested: number[] = [];
+/** Speed argument of each generate call - the rate baked into the samples. */
+export const speeds: number[] = [];
+export let failNext = 0;
+export function setFailNext(n: number): void { failNext = n; }
+
+/** Wall-clock cost of generating one chunk, for simulating slow devices. */
+export let delayMs = 1;
+export function setDelayMs(ms: number): void { delayMs = ms; }
+
+/** Reported real-time factor, for exercising slow-device adaptation. */
+export let rtf: number | null = 4;
+export function setRtf(v: number | null): void { rtf = v; }
+
+/** Text length maps to a plausible audio duration (~15 chars/second). */
+function durationFor(text: string): number { return Math.max(1, text.length / 15); }
+
+export const kokoroClient = {
+  getStatus() { return { state: 'ready', device: 'wasm', progress: 1, message: '', rtf }; },
+  subscribe(fn: (s: unknown) => void) { fn(this.getStatus()); return () => {}; },
+  init() {},
+  reinit() {},
+  async generate(text: string, voice: string, speed = 1) {
+    calls.push(`${voice}:${text.slice(0, 12)}`);
+    speeds.push(speed);
+    const m = /__IDX(\d+)__/.exec(text);
+    if (m) requested.push(Number(m[1]));
+    if (failNext > 0) { failNext--; throw new Error('simulated failure'); }
+    await new Promise((r) => setTimeout(r, delayMs));
+    return { blob: new Blob([new Uint8Array(1024)], { type: 'audio/wav' }), durationSec: durationFor(text), genMs: 10 };
+  },
+  cancel() {},
+  benchmark() { return this.generate('bench', 'af_heart'); },
+  dispose() {},
+};
